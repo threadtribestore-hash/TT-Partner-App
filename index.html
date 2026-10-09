@@ -197,6 +197,8 @@
   // ======================= data & sync =======================
   var KEY = 'tt-partner-portal-v1';
   var FLOW = ['assigned', 'accepted', 'printing', 'shipped'];
+  // A step a partner can deliberately go back to (sent with revert:true so Studio accepts it).
+  var BACK = { printing: 'accepted', shipped: 'printing' };
   var STEP_LABEL = { assigned: 'New', accepted: 'Accepted', printing: 'Printing', shipped: 'Shipped', delivered: 'Delivered', cancelled: 'Cancelled' };
   var SWATCH = { black:'#2b2f36', white:'#f2f4f7', red:'#e8615a', blue:'#4f7fd6', green:'#7ed08a', yellow:'#f0dd52', orange:'#f0a83c', purple:'#b48cf0',
     grey:'#8a95a3', gray:'#8a95a3', silver:'#c3cad4', gold:'#d8b34a', pink:'#f08cc4', brown:'#8a5a3c', beige:'#d9c7a3', cyan:'#22d3ee', skin:'#e8b89b', ivory:'#f3ead7' };
@@ -309,7 +311,7 @@
       if(!rep || !isOpen(j)) return;
       if(j.reportAt && Date.parse(rep.updated_at) <= Date.parse(j.reportAt)) return;
       var R = rep.report || {};
-      if(FLOW.indexOf(R.status) > FLOW.indexOf(j.status)) j.status = R.status;
+      if(FLOW.indexOf(R.status) > FLOW.indexOf(j.status) || (R.revert && FLOW.indexOf(R.status) >= 0 && FLOW.indexOf(R.status) < FLOW.indexOf(j.status))) j.status = R.status;
       ['unitsShipped', 'failedPrints', 'gramsUsed'].forEach(function(f){ if(typeof R[f] === 'number') j[f] = R[f]; });
       ['trackingNo', 'partnerNotes'].forEach(function(f){ if(typeof R[f] === 'string') j[f] = R[f]; });
       if(R.shippedDate) j.shippedDate = R.shippedDate;
@@ -320,7 +322,7 @@
       var e = store.edits[j.id];
       if(!e || !isOpen(j)) return;
       var diff = EDIT_FIELDS.some(function(f){ return e[f] !== undefined && String(e[f]) !== String(j[f] == null ? '' : j[f]); });
-      if(diff && FLOW.indexOf(e.status || j.status) >= FLOW.indexOf(j.status)){ if(e.status && FLOW.indexOf(e.status) === FLOW.indexOf(j.status)) delete e.status; kept[j.id] = e; }
+      if(diff && (e.revert || FLOW.indexOf(e.status || j.status) >= FLOW.indexOf(j.status))){ if(e.status && FLOW.indexOf(e.status) === FLOW.indexOf(j.status)) delete e.status; kept[j.id] = e; }
     });
     store.partnerId = pid; store.pack = p; store.edits = kept;
     save();
@@ -354,7 +356,7 @@
     var sentAt = new Date().toISOString();
     var list = store.pack.jobs.filter(function(j){ return ids.indexOf(j.id) !== -1; }).map(job).map(function(j){
       return { id: j.id, status: j.status, unitsShipped: j.unitsShipped || 0, failedPrints: j.failedPrints || 0, gramsUsed: j.gramsUsed || 0,
-        trackingNo: j.trackingNo || '', shippedDate: j.shippedDate || '', partnerNotes: j.partnerNotes || '' };
+        trackingNo: j.trackingNo || '', shippedDate: j.shippedDate || '', partnerNotes: j.partnerNotes || '', revert: !!(store.edits[j.id] && store.edits[j.id].revert) };
     });
     var r = await sb.rpc('pon_submit_report', { p_jobs: list });
     cloud.saving = false;
@@ -785,6 +787,7 @@
       var canUndo = store.edits[j.id] && store.edits[j.id].status && FLOW.indexOf(store.edits[j.id].status) > FLOW.indexOf(base.status);
       var small = [];
       if(canUndo) small.push('<button class="link dim" data-a="undo" data-id="' + esc(j.id) + '">Undo last step</button>');
+      else if(BACK[j.status] && !decl) small.push('<button class="link dim" data-a="back" data-id="' + esc(j.id) + '">← Back to ' + STEP_LABEL[BACK[j.status]] + '</button>');
       if(!decl && ['assigned', 'accepted', 'printing'].indexOf(j.status) !== -1 && !cloud.missing) small.push('<button class="link dim" data-a="decline" data-id="' + esc(j.id) + '">Can’t do this job?</button>');
       if(small.length) html += '<div style="display:flex; justify-content:space-between; margin-top:6px;">' + small.join('') + '</div>';
       html += progressCard(j) + pickupCard(j);
@@ -1042,6 +1045,7 @@
     var next = { assigned: 'accepted', accepted: 'printing' }[f.j.status];
     if(!next) return;
     setEdit(id, 'status', next);
+    if(store.edits[id]) delete store.edits[id].revert;
     buzz();
     toast(next === 'accepted' ? 'Job accepted' : 'Marked as printing');
     scheduleSave(); renderAll();
@@ -1088,6 +1092,17 @@
     if(a === 'req-fil'){ openSheet({ kind: 'req-fil', opt: { color: b.getAttribute('data-color') || '', g: num(b.getAttribute('data-g')) }, force: true }); return; }
     if(a === 'ack-problem'){ openSheet({ kind: 'ack-problem', opt: { id: id, amt: num(b.getAttribute('data-amt')) }, force: true }); return; }
     if(a === 'profile'){ openSheet({ kind: 'profile', force: true }); return; }
+    if(a === 'back'){
+      var fb = findJob(id); if(!fb) return;
+      var to = BACK[fb.j.status]; if(!to) return;
+      if(!confirm('Move this job back to “' + STEP_LABEL[to] + '”?' + (fb.j.status === 'shipped' ? ' The shipped date will be cleared.' : ''))) return;
+      setEdit(id, 'status', to);
+      store.edits[id].revert = true;
+      if(fb.j.status === 'shipped') setEdit(id, 'shippedDate', '');
+      save(); buzz(); toast('Moved back to ' + STEP_LABEL[to]);
+      scheduleSave(); openSheet({ kind: 'job', id: id, force: true }); renderAll();
+      return;
+    }
     if(a === 'prog'){ openSheet({ kind: 'job', id: id, mode: 'prog', force: true }); setTimeout(function(){ var t = document.getElementById('gPrinted'); if(t) t.focus(); }, 280); return; }
     if(a === 'pk'){ openSheet({ kind: 'job', id: id, mode: 'pk', force: true }); return; }
     if(a === 'cap-edit'){ capDraft = null; openSheet({ kind: 'capacity', force: true }); return; }
