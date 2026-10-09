@@ -613,7 +613,7 @@
     });
     // 5b. design projects
     var pt = isDesigner() ? pjTodo() : [];
-    if(pt.length) items.push({ w: 2.2, h: act('warn', '💡', pt.length + ' thing' + (pt.length === 1 ? '' : 's') + ' to do on your design projects', pt.slice(0, 2).map(function(x){ return esc(x.kind === 'task' ? x.t.data.title : 'Changes on ' + ((x.p.data || {}).title || '')); }).join(' · '), '<button class="btn small" data-a="tab" data-tab="projects">Open projects</button>') });
+    if(pt.length) items.push({ w: 2.2, h: act('warn', '💡', pt.length + ' project step' + (pt.length === 1 ? '' : 's') + ' due soon', pt.slice(0, 2).map(function(x){ return esc(x.t.data.title); }).join(' · '), '<button class="btn small" data-a="tab" data-tab="projects">Open projects</button>') });
     // 6. setup
     var pr = store.profile || {};
     if(!cloud.missing && !(pr.upi || pr.account_no)) items.push({ w: 6, h: act('', '🏦', 'Add your UPI ID', 'So Thread Tribe can pay you straight away.', '<button class="btn small" data-a="profile">Add now</button>') });
@@ -859,28 +859,27 @@
   }
 
   // ---- custom design projects (projects / project_items; this partner is the designer) ----
-  var PJ_STAGES = [['pitch', 'Pitch'], ['brief', 'Brief'], ['concept', 'Concept'], ['cad', 'CAD'], ['prototype', 'Prototype'], ['approval', 'Approval'], ['production', 'Production'], ['live', 'Live']];
-  // Stages the designer can move a project into; production-ready and live are Thread Tribe's call.
-  var PJ_MINE = ['concept', 'cad', 'prototype', 'approval'];
-  var PJ_REQ = { filament: 'Filament / material', parts: 'Hardware parts', printer: 'Printer time', client: 'Question for the client', budget: 'Budget', other: 'Something else' };
-  var pj = { list: [], items: {}, missing: false, loaded: false, sel: null, chan: null, thumb: '' };
+  // Simple tracking: stage, due date, steps and updates.
+  var PJ_STAGES = [['brief', 'Brief'], ['design', 'Design'], ['prototype', 'Prototype'], ['approval', 'Approval'], ['live', 'Live']];
+  var PJ_OLD = { pitch: 'brief', concept: 'design', cad: 'design', production: 'approval' };
+  // The designer can move a project forward up to Approval; Live is Thread Tribe's call.
+  var PJ_MINE = ['design', 'prototype', 'approval'];
+  var pj = { list: [], items: {}, missing: false, sel: null, chan: null };
   function isDesigner(){ return !!(store.pack && store.pack.designer) || pj.list.length > 0; }
   function pjUid(){ return Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
   function pjWhen(s){ var d = new Date(s); return isNaN(d) ? '' : d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }); }
-  function pjUrl(u){ return typeof u === 'string' && /^https?:\/\/[^\s"'<>]+$/i.test(u); }
-  function pjImg(d){ return typeof d === 'string' && /^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+\/=]+$/.test(d); }
+  function pjSt(p){ var s = (p.data || {}).stage || 'brief'; return PJ_OLD[s] || s; }
   function pjStage(k){ var s = PJ_STAGES.find(function(x){ return x[0] === k; }); return s ? s[1] : k === 'on_hold' ? 'On hold' : k === 'cancelled' ? 'Cancelled' : k; }
   async function loadProjects(){
     if(!sb || !session || !store.partnerId) return;
-    var r = await sb.from('projects').select('id,designer_id,client_id,data,created_by,updated_at').eq('designer_id', store.partnerId).order('updated_at', { ascending: false });
-    if(r.error){ pj.missing = /projects|does not exist|schema cache|relation/i.test(r.error.message || ''); pj.loaded = true; return; }
+    var r = await sb.from('projects').select('id,designer_id,client_id,data,updated_at').eq('designer_id', store.partnerId).order('updated_at', { ascending: false });
+    if(r.error){ pj.missing = /projects|does not exist|schema cache|relation/i.test(r.error.message || ''); return; }
     pj.missing = false; pj.list = r.data || []; pj.items = {};
     if(pj.list.length){
-      var it = await sb.from('project_items').select('project_id,id,kind,author,data,updated_at').in('project_id', pj.list.map(function(p){ return p.id; })).eq('deleted', false);
+      var it = await sb.from('project_items').select('project_id,id,kind,author,data').in('project_id', pj.list.map(function(p){ return p.id; })).in('kind', ['task', 'comment']).eq('deleted', false);
       (it.data || []).forEach(function(x){ (pj.items[x.project_id] = pj.items[x.project_id] || []).push(x); });
       Object.keys(pj.items).forEach(function(k){ pj.items[k].sort(function(a, b){ return ((a.data && a.data.at) || '').localeCompare((b.data && b.data.at) || ''); }); });
     }
-    pj.loaded = true;
     if(!pj.chan){
       try{
         pj.chan = sb.channel('tt-pj-' + pjUid())
@@ -893,196 +892,87 @@
   var pjT = null;
   function pjSoon(){ clearTimeout(pjT); pjT = setTimeout(function(){ loadProjects().then(renderAll); }, 500); }
   function pjGet(id){ return pj.list.find(function(p){ return p.id === id; }); }
-  function pjItems(id, kind){ return (pj.items[id] || []).filter(function(x){ return !kind || x.kind === kind; }); }
-  function pjVerdict(pid, target, who){ return pjItems(pid, 'approval').filter(function(a){ return a.author === who && a.data && a.data.target === target; }).pop(); }
-  async function pjAdd(pid, kind, data){
-    if(!session){ toast('Sign in again to save this'); return false; }
-    var row = { project_id: pid, id: pjUid(), kind: kind, author: 'designer', data: Object.assign({ at: new Date().toISOString() }, data) };
-    var r = await sb.from('project_items').insert(row);
-    if(r.error){ toast(friendlyErr(r.error)); return false; }
-    (pj.items[pid] = pj.items[pid] || []).push(row);
-    return true;
-  }
-  async function pjSaveProject(p){
-    var r = await sb.from('projects').update({ data: p.data }).eq('id', p.id);
-    if(r.error){ toast(friendlyErr(r.error)); return false; }
-    return true;
-  }
-  // What needs the designer: their tasks due within 2 days, changes asked on the latest prototype, open-request replies.
+  function pjItems(id, kind){ return (pj.items[id] || []).filter(function(x){ return x.kind === kind; }); }
+  function pjProg(id){ var ts = pjItems(id, 'task'); return { done: ts.filter(function(t){ return t.data.done; }).length, total: ts.length }; }
+  function pjBar(pr){ return pr.total ? '<div class="bar"><span style="width:' + Math.round(100 * pr.done / pr.total) + '%;background:var(--green);"></span></div><div class="hint">' + pr.done + ' of ' + pr.total + ' steps done</div>' : ''; }
+  // The designer's own steps that are late or due within 2 days.
   function pjTodo(){
     var out = [];
     pj.list.forEach(function(p){
-      var d = p.data || {};
-      if(d.stage === 'cancelled' || d.stage === 'live') return;
+      if(['live', 'cancelled', 'on_hold'].indexOf(pjSt(p)) !== -1) return;
       pjItems(p.id, 'task').forEach(function(t){
         var du = daysUntil(t.data.due);
-        if(!t.data.done && t.data.owner !== 'tt' && du != null && du <= 2) out.push({ p: p, kind: 'task', t: t, d: du });
+        if(!t.data.done && t.data.owner !== 'tt' && du != null && du <= 2) out.push({ p: p, t: t, d: du });
       });
-      var protos = pjItems(p.id, 'proto'), last = protos[protos.length - 1];
-      if(last){
-        var v = pjVerdict(p.id, last.id, 'tt'), c = pjVerdict(p.id, last.id, 'client');
-        if((v && v.data.decision === 'changes') || (c && c.data.decision === 'changes')) out.push({ p: p, kind: 'changes', note: ((v && v.data.decision === 'changes' ? v.data.note : '') || (c && c.data.note) || '') });
-      }
     });
     return out;
   }
   function pjCard(p){
     var d = p.data || {}, next = pjItems(p.id, 'task').find(function(t){ return !t.data.done; });
     return '<button class="job" data-a="pj-open" data-id="' + esc(p.id) + '"><span class="body"><span class="t">' + esc(d.title || 'Untitled') + '</span>' +
-      '<span class="s" style="display:block;">' + pjStage(d.stage || 'brief') + (d.clientName ? ' · for ' + esc(d.clientName) : '') + (d.due ? ' · due ' + fmtDate(d.due) : '') + '</span>' +
-      (next ? '<span class="s" style="display:block;">Next: ' + esc(next.data.title) + (next.data.due ? ' · ' + fmtDate(next.data.due) : '') + '</span>' : '') + '</span><span class="chev">›</span></button>';
+      '<span class="s" style="display:block;">' + pjStage(pjSt(p)) + (d.clientName ? ' · for ' + esc(d.clientName) : '') + (d.due ? ' · due ' + fmtDate(d.due) : '') + '</span>' +
+      (next ? '<span class="s" style="display:block;">Next: ' + esc(next.data.title) + (next.data.due ? ' · ' + fmtDate(next.data.due) : '') + '</span>' : '') + pjBar(pjProg(p.id)) + '</span><span class="chev">›</span></button>';
   }
   function projectsHtml(){
     if(pj.missing) return '<div class="card empty"><b>Projects aren’t switched on yet</b>Thread Tribe needs to finish setting them up.</div>';
     if(pj.sel && pjGet(pj.sel)) return projectHtml(pjGet(pj.sel));
-    var open = pj.list.filter(function(p){ return ['live', 'cancelled'].indexOf((p.data || {}).stage) === -1; }), done = pj.list.filter(function(p){ return open.indexOf(p) === -1; });
-    var html = '<div class="btns" style="margin:0 0 12px;"><button class="btn primary" data-a="pj-pitch">💡 Pitch an idea</button></div>';
-    var todo = pjTodo();
-    if(todo.length) html += '<div class="h2">Needs you<span class="count">' + todo.length + '</span></div>' + todo.map(function(x){
-      return x.kind === 'task' ? act(x.d < 0 ? 'bad' : 'warn', '✏️', esc(x.t.data.title), esc((x.p.data || {}).title) + ' · ' + (x.d < 0 ? (-x.d) + ' day' + (x.d === -1 ? '' : 's') + ' late' : x.d === 0 ? 'due today' : 'due ' + fmtDate(x.t.data.due)), '<button class="btn small" data-a="pj-open" data-id="' + esc(x.p.id) + '">Open</button>')
-        : act('warn', '🔁', 'Changes asked on ' + esc((x.p.data || {}).title), esc(x.note || 'See the latest prototype'), '<button class="btn small" data-a="pj-open" data-id="' + esc(x.p.id) + '">Open</button>');
+    var open = pj.list.filter(function(p){ return ['live', 'cancelled'].indexOf(pjSt(p)) === -1; }), done = pj.list.filter(function(p){ return open.indexOf(p) === -1; });
+    var html = '', todo = pjTodo();
+    if(todo.length) html += '<div class="h2">Due soon<span class="count">' + todo.length + '</span></div>' + todo.map(function(x){
+      return act(x.d < 0 ? 'bad' : 'warn', '✏️', esc(x.t.data.title), esc((x.p.data || {}).title) + ' · ' + (x.d < 0 ? (-x.d) + ' day' + (x.d === -1 ? '' : 's') + ' late' : x.d === 0 ? 'due today' : 'due ' + fmtDate(x.t.data.due)), '<button class="btn small" data-a="pj-open" data-id="' + esc(x.p.id) + '">Open</button>');
     }).join('');
-    html += '<div class="h2">Projects<span class="count">' + open.length + '</span></div>' + (open.length ? open.map(pjCard).join('') : '<div class="card empty"><b>No projects yet</b>Pitch an idea, or Thread Tribe will add you to one.</div>');
+    html += '<div class="h2">Projects<span class="count">' + open.length + '</span></div>' + (open.length ? open.map(pjCard).join('') : '<div class="card empty"><b>No projects yet</b>Thread Tribe will add you to one.</div>');
     if(done.length) html += '<div class="h2">Live &amp; closed<span class="count">' + done.length + '</span></div>' + done.map(pjCard).join('');
     return html;
   }
   function projectHtml(p){
-    var d = p.data || {}, e = (store.pack.projectEarnings || {})[p.id], st = d.stage || 'brief';
-    var idx = PJ_STAGES.findIndex(function(s){ return s[0] === st; });
+    var d = p.data || {}, st = pjSt(p), idx = PJ_STAGES.findIndex(function(s){ return s[0] === st; });
     var html = '<button class="link" data-a="pj-back">‹ All projects</button>' +
       '<div class="card"><div style="font-size:19px;font-weight:700;">' + esc(d.title || 'Untitled') + '</div>' +
-      '<div class="hint" style="margin-top:2px;">' + (d.clientName ? 'For ' + esc(d.clientName) + ' · ' : '') + (d.due ? 'due ' + fmtDate(d.due) : 'no due date') + (d.qty ? ' · ' + d.qty + ' pcs' : '') + (d.targetPrice ? ' · target ₹' + d.targetPrice + '/pc' : '') + '</div>' +
-      (idx >= 0 ? '<div class="steps">' + PJ_STAGES.map(function(s, i){ return '<div class="st ' + (i < idx ? 'done' : i === idx ? 'now' : '') + '"><b>' + (i < idx ? '✓' : i + 1) + '</b>' + (i === idx ? s[1] : '') + '</div>'; }).join('') + '</div>' : '<div class="note warn">' + pjStage(st) + '</div>');
+      '<div class="hint" style="margin-top:2px;">' + (d.clientName ? 'For ' + esc(d.clientName) + ' · ' : '') + (d.due ? 'due ' + fmtDate(d.due) : 'no due date') + '</div>' +
+      (idx >= 0 ? '<div class="steps">' + PJ_STAGES.map(function(s, i){ return '<div class="st ' + (i < idx ? 'done' : i === idx ? 'now' : '') + '"><b>' + (i < idx ? '✓' : i + 1) + '</b>' + s[1] + '</div>'; }).join('') + '</div>' : '<div class="note warn">' + pjStage(st) + '</div>');
     var nextSt = PJ_STAGES[idx + 1];
     if(nextSt && PJ_MINE.indexOf(nextSt[0]) !== -1) html += '<div class="btns"><button class="btn primary small" data-a="pj-stage" data-st="' + nextSt[0] + '">Move to ' + nextSt[1] + '</button></div>';
-    else if(st === 'pitch') html += '<div class="hint">Waiting for Thread Tribe to take this idea on.</div>';
-    else if(st === 'approval') html += '<div class="hint">Waiting for approval. Thread Tribe moves it to production.</div>';
-    html += '</div>';
-    if(d.brief || (d.refs || []).length) html += '<div class="h2">Brief</div><div class="card">' + (d.brief ? '<div style="white-space:pre-wrap;">' + esc(d.brief) + '</div>' : '') +
-      (d.refs || []).filter(pjUrl).map(function(u){ return '<div><a class="link" href="' + esc(u) + '" target="_blank" rel="noopener">' + esc(u.replace(/^https?:\/\//, '').slice(0, 48)) + ' ↗</a></div>'; }).join('') + '</div>';
-    // tasks
+    else if(st === 'approval') html += '<div class="hint">Waiting for approval. Thread Tribe marks it live.</div>';
+    html += (d.brief ? '<div style="white-space:pre-wrap;margin-top:12px;">' + esc(d.brief) + '</div>' : '') + '</div>';
     var tasks = pjItems(p.id, 'task');
-    html += '<div class="h2">Plan<span class="count">' + tasks.filter(function(t){ return !t.data.done; }).length + '</span></div><div class="card">' +
+    html += '<div class="h2">Steps<span class="count">' + tasks.filter(function(t){ return !t.data.done; }).length + '</span></div><div class="card">' + pjBar(pjProg(p.id)) +
       (tasks.length ? tasks.map(function(t){
         var du = daysUntil(t.data.due);
         return '<label class="row" style="margin:0;cursor:pointer;"><span style="display:flex;gap:10px;align-items:center;"><input type="checkbox" style="width:auto;" data-a="pj-task" data-id="' + esc(t.id) + '"' + (t.data.done ? ' checked' : '') + '><span style="color:var(--text);' + (t.data.done ? 'text-decoration:line-through;opacity:.6;' : '') + '">' + esc(t.data.title) + '</span></span>' +
           '<span class="r" style="font-weight:500;font-size:12.5px;">' + (t.data.owner === 'tt' ? 'Thread Tribe' : 'You') + (t.data.due ? ' · <span class="chip ' + (!t.data.done && du < 0 ? 'late' : !t.data.done && du <= 2 ? 'soon' : '') + '">' + fmtDate(t.data.due) + '</span>' : '') + '</span></label>';
       }).join('') : '<div class="muted">No steps yet — add the milestones you plan to hit.</div>') +
-      '<div class="btns"><button class="btn small" data-a="pj-form" data-k="pj-task" data-id="' + esc(p.id) + '">+ Add step</button></div></div>';
-    // prototypes
-    var protos = pjItems(p.id, 'proto'), grams = protos.reduce(function(t, x){ return t + (+x.data.grams || 0); }, 0);
-    html += '<div class="h2">Prototypes<span class="count">' + protos.length + '</span></div>' + protos.map(function(x, i){
-      var v = pjVerdict(p.id, x.id, 'tt'), c = pjVerdict(p.id, x.id, 'client');
-      var tag = function(a, who){ return a ? '<span class="pill ' + (a.data.decision === 'approved' ? 'done' : 'wait') + '">' + who + ': ' + (a.data.decision === 'approved' ? 'approved' : 'changes') + '</span> ' : ''; };
-      return '<div class="card" style="display:flex;gap:12px;">' + (pjImg(x.data.thumb) ? '<img src="' + x.data.thumb + '" alt="" style="width:76px;height:76px;object-fit:cover;border-radius:12px;flex:none;">' : '') +
-        '<div style="flex:1;min-width:0;"><b>Round ' + (i + 1) + '</b> <span class="hint">' + pjWhen(x.data.at) + '</span>' +
-        '<div class="hint" style="margin:2px 0 4px;">' + esc([x.data.color, x.data.grams ? grams_(x.data.grams) : '', x.data.hours ? x.data.hours + ' h' : ''].filter(Boolean).join(' · ')) + '</div>' +
-        (x.data.notes ? '<div style="font-size:14px;">' + esc(x.data.notes) + '</div>' : '') + (pjUrl(x.data.link) ? '<a class="link" href="' + esc(x.data.link) + '" target="_blank" rel="noopener">Photos / files ↗</a>' : '') +
-        '<div style="margin-top:6px;">' + tag(v, 'Thread Tribe') + tag(c, d.clientName || 'Client') + '</div>' +
-        (v && v.data.note ? '<div class="note warn" style="margin-top:8px;">' + esc(v.data.note) + '</div>' : '') + (c && c.data.note ? '<div class="note info" style="margin-top:8px;">' + esc(c.data.note) + '</div>' : '') + '</div></div>';
-    }).join('') + '<div class="btns" style="margin:0 0 4px;"><button class="btn small primary" data-a="pj-form" data-k="pj-proto" data-id="' + esc(p.id) + '">+ Log a prototype</button></div>' +
-      (protos.length ? '<div class="hint">' + grams_(grams) + ' of filament used on prototypes' + (d.budgetGrams ? ' (budget ' + grams_(d.budgetGrams) + ')' : '') + '. It comes off your filament balance.</div>' : '') + (p.client_id && protos.length ? '<div class="hint">Thread Tribe shares rounds with ' + esc(d.clientName || 'the client') + ' when they’re ready.</div>' : '');
-    // files
-    var files = pjItems(p.id, 'file');
-    html += '<div class="h2">Design files</div><div class="card">' + (files.length ? files.map(function(f){
-      return '<div class="row"><span>' + (pjUrl(f.data.url) ? '<a class="link" href="' + esc(f.data.url) + '" target="_blank" rel="noopener">' + esc(f.data.label || 'Link') + ' ↗</a>' : esc(f.data.label || '')) + '</span><span class="r" style="font-weight:500;font-size:12.5px;">' + pjWhen(f.data.at) + '</span></div>';
-    }).join('') : '<div class="muted">Add Drive / Onshape / Printables links to your STL, STEP or renders.</div>') +
-      '<div class="btns"><button class="btn small" data-a="pj-form" data-k="pj-file" data-id="' + esc(p.id) + '">+ Add link</button></div></div>';
-    // help
-    var reqs = pjItems(p.id, 'request');
-    html += '<div class="h2">Help from Thread Tribe</div><div class="card">' + reqs.map(function(q){
-      var s = q.data.status || 'open';
-      return '<div class="row" style="align-items:flex-start;"><span><b>' + esc(PJ_REQ[q.data.type] || 'Request') + '</b><div class="hint" style="margin:0;">' + esc(q.data.text || '') + '</div>' + (q.data.reply ? '<div style="font-size:13.5px;margin-top:2px;">↳ ' + esc(q.data.reply) + '</div>' : '') + '</span>' +
-        '<span class="pill ' + (s === 'open' ? 'wait' : s === 'done' ? 'done' : 'no') + '">' + (s === 'open' ? 'open' : s === 'done' ? 'done' : 'declined') + '</span></div>';
-    }).join('') + '<div class="btns"><button class="btn small" data-a="pj-form" data-k="pj-req" data-id="' + esc(p.id) + '">Ask for help</button></div></div>';
-    // hours + earnings
-    var hrs = pjItems(p.id, 'hours');
-    html += '<div class="h2">Hours &amp; earnings</div><div class="card">' +
-      (e ? '<div class="row"><span>Design hours approved</span><span class="r">' + e.hoursApproved + ' h' + (e.hourlyRate ? ' · ' + money(e.hourly) : '') + '</span></div>' +
-        '<div class="row"><span>Royalty (' + esc(e.royaltyTerms) + ')</span><span class="r">' + e.pieces + ' sold · ' + money(e.royalty) + '</span></div>' +
-        '<div class="row"><span>Paid so far</span><span class="r">' + money(e.paid) + '</span></div>' +
-        '<div class="row"><span><b>Due to you</b></span><span class="r" style="color:var(--green);">' + money(e.due) + '</span></div>' : '<div class="muted">Thread Tribe will set your hourly rate and royalty.</div>') +
-      hrs.slice(-6).reverse().map(function(h){
-        var v = pjVerdict(p.id, h.id, 'tt');
-        return '<div class="row"><span>' + (+h.data.hours || 0) + ' h · ' + fmtDate(h.data.date) + '<div class="hint" style="margin:0;">' + esc(h.data.note || '') + '</div></span><span class="pill ' + (!v ? 'wait' : v.data.decision === 'approved' ? 'done' : 'no') + '">' + (!v ? 'waiting' : v.data.decision) + '</span></div>';
-      }).join('') + '<div class="btns"><button class="btn small" data-a="pj-form" data-k="pj-hours" data-id="' + esc(p.id) + '">+ Log hours</button></div>' +
-      '<div class="hint">Design fees are added to your payout in Money.</div></div>';
-    // conversation
+      '<div class="btns"><button class="btn small" data-a="pj-form" data-id="' + esc(p.id) + '">+ Add step</button></div></div>';
     var cm = pjItems(p.id, 'comment');
-    html += '<div class="h2">Conversation</div><div class="card">' + (cm.length ? cm.slice(-20).map(function(c){
+    html += '<div class="h2">Updates</div><div class="card">' + (cm.length ? cm.slice(-20).map(function(c){
       var who = c.author === 'designer' ? 'You' : c.author === 'tt' ? 'Thread Tribe' : (d.clientName || 'Client');
       return '<div style="margin:0 0 10px;' + (c.author === 'designer' ? 'text-align:right;' : '') + '"><div class="hint" style="margin:0;">' + who + ' · ' + pjWhen(c.data.at) + (c.data.internal ? ' · not shown to client' : '') + '</div><div style="white-space:pre-wrap;">' + esc(c.data.text || '') + '</div></div>';
-    }).join('') : '<div class="muted">Talk to Thread Tribe' + (p.client_id ? ' and ' + esc(d.clientName || 'the client') : '') + ' here.</div>') +
-      '<textarea id="pjMsg" placeholder="Write a message" style="min-height:60px;margin-top:6px;"></textarea>' +
+    }).join('') : '<div class="muted">Post progress or questions for Thread Tribe' + (p.client_id ? ' and ' + esc(d.clientName || 'the client') : '') + ' here.</div>') +
+      '<textarea id="pjMsg" placeholder="Write an update" style="min-height:60px;margin-top:6px;"></textarea>' +
       (p.client_id ? '<label style="display:flex;gap:8px;align-items:center;margin:8px 0 0;"><input type="checkbox" id="pjMsgInt" style="width:auto;"> Only Thread Tribe (hide from client)</label>' : '') +
-      '<div class="btns"><button class="btn primary small" data-a="pj-send" data-id="' + esc(p.id) + '">Send</button></div></div>';
+      '<div class="btns"><button class="btn primary small" data-a="pj-send" data-id="' + esc(p.id) + '">Post</button></div></div>';
     return html;
   }
-  function grams_(g){ return grams(+g || 0); }
   function pjForm(kind, opt){
-    var head = function(t){ return '<div class="sheet-h"><div class="t">' + t + '</div><button class="x" data-a="close">✕</button></div>'; };
-    var id = esc(opt.id || '');
-    if(kind === 'pj-pitch') return head('Pitch an idea') +
-      '<div class="muted">Thread Tribe reviews it and, if it’s a go, turns it into a project with you.</div>' +
-      '<label>Name</label><input id="qTitle" placeholder="e.g. Articulated axolotl">' +
-      '<label>The idea</label><textarea id="qBrief" placeholder="What is it, who would buy it, why it would sell"></textarea>' +
-      '<label>Reference links (optional, one per line)</label><textarea id="qRefs" style="min-height:60px;" placeholder="https://"></textarea>' +
-      '<div class="grid2"><div><label>Design hours (estimate)</label><input id="qHours" type="number" inputmode="decimal" min="0"></div><div><label>Prototype filament (g)</label><input id="qGrams" type="number" inputmode="numeric" min="0"></div></div>' +
-      '<button class="btn primary block" data-a="pj-pitch-send" style="margin-top:16px;">Send pitch</button>';
-    if(kind === 'pj-task') return head('Add a step') +
+    return '<div class="sheet-h"><div class="t">Add a step</div><button class="x" data-a="close">✕</button></div>' +
       '<label>What</label><input id="qTitle" placeholder="e.g. First CAD draft">' +
       '<label>Due</label><input id="qDue" type="date" min="' + today() + '">' +
-      '<button class="btn primary block" data-a="pj-task-save" data-id="' + id + '" style="margin-top:16px;">Add</button>';
-    if(kind === 'pj-proto') return head('Log a prototype') +
-      '<label>Photo (optional)</label><input id="qPhoto" type="file" accept="image/*" capture="environment"><div id="qPhotoPrev" class="hint"></div>' +
-      '<div class="grid2"><div><label>Filament used (g)</label><input id="qGrams" type="number" inputmode="numeric" min="0"></div><div><label>Print time (h)</label><input id="qHours" type="number" inputmode="decimal" min="0" step="0.5"></div></div>' +
-      '<label>Colour / material</label><input id="qColor" placeholder="e.g. Silk Green PLA">' +
-      '<label>What changed / what to check</label><textarea id="qNotes"></textarea>' +
-      '<label>Link to photos or files (optional)</label><input id="qLink" placeholder="https://">' +
-      '<button class="btn primary block" data-a="pj-proto-save" data-id="' + id + '" style="margin-top:16px;">Save round</button>';
-    if(kind === 'pj-file') return head('Add a design file link') +
-      '<label>What is it</label><input id="qLabel" placeholder="e.g. STL v3, final">' +
-      '<label>Link</label><input id="qLink" placeholder="https://drive.google.com/…" autocapitalize="none">' +
-      '<button class="btn primary block" data-a="pj-file-save" data-id="' + id + '" style="margin-top:16px;">Add</button>';
-    if(kind === 'pj-req') return head('Ask Thread Tribe for help') +
-      '<label>About</label><select id="qType">' + Object.keys(PJ_REQ).map(function(k){ return '<option value="' + k + '">' + PJ_REQ[k] + '</option>'; }).join('') + '</select>' +
-      '<label>Details</label><textarea id="qText" placeholder="e.g. 1 kg Silk Green PLA by Friday"></textarea>' +
-      '<button class="btn primary block" data-a="pj-req-save" data-id="' + id + '" style="margin-top:16px;">Send</button>';
-    if(kind === 'pj-hours') return head('Log design hours') +
-      '<div class="grid2"><div><label>Hours</label><input id="qHours" type="number" inputmode="decimal" min="0.5" step="0.5"></div><div><label>Date</label><input id="qDate" type="date" max="' + today() + '" value="' + today() + '"></div></div>' +
-      '<label>What you worked on</label><input id="qNote" placeholder="e.g. CAD revisions after feedback">' +
-      '<button class="btn primary block" data-a="pj-hours-save" data-id="' + id + '" style="margin-top:16px;">Send for approval</button>';
-    return '';
+      '<button class="btn primary block" data-a="pj-task-save" data-id="' + esc(opt.id || '') + '" style="margin-top:16px;">Add</button>';
   }
-  // Shrink a photo to a small JPEG so it fits in the project row.
-  function pjShrink(file){
-    return new Promise(function(res){
-      var img = new Image(), url = URL.createObjectURL(file);
-      img.onload = function(){
-        var s = Math.min(1, 480 / Math.max(img.width, img.height)), c = document.createElement('canvas');
-        c.width = Math.round(img.width * s); c.height = Math.round(img.height * s);
-        c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
-        URL.revokeObjectURL(url);
-        var q = 0.7, d = c.toDataURL('image/jpeg', q);
-        while(d.length > 120000 && q > 0.3){ q -= 0.1; d = c.toDataURL('image/jpeg', q); }
-        res(d);
-      };
-      img.onerror = function(){ res(''); };
-      img.src = url;
-    });
-  }
-  document.getElementById('sheet').addEventListener('change', async function(e){
-    if(e.target.id !== 'qPhoto' || !e.target.files || !e.target.files[0]) return;
-    pj.thumb = await pjShrink(e.target.files[0]);
-    var pv = document.getElementById('qPhotoPrev'); if(pv) pv.innerHTML = pj.thumb ? '<img src="' + pj.thumb + '" style="width:90px;height:90px;object-fit:cover;border-radius:12px;">' : 'Couldn’t read that photo.';
-  });
   function pjVal(id){ var el = document.getElementById(id); return el ? String(el.value || '').trim() : ''; }
+  async function pjAdd(pid, kind, data){
+    if(!session){ toast('Sign in again to save this'); return false; }
+    var row = { project_id: pid, id: pjUid(), kind: kind, author: 'designer', data: Object.assign({ at: new Date().toISOString() }, data) };
+    var r = await sb.from('project_items').insert(row);
+    if(r.error){ toast(friendlyErr(r.error)); return false; }
+    (pj.items[pid] = pj.items[pid] || []).push(row);
+    ping('report');
+    return true;
+  }
   async function pjAction(a, b, id){
-    var p = id ? pjGet(id) : null, ok = false;
     if(a === 'pj-open'){ pj.sel = id; renderAll(); window.scrollTo(0, 0); return; }
     if(a === 'pj-back'){ pj.sel = null; renderAll(); return; }
-    if(a === 'pj-pitch'){ pj.thumb = ''; openSheet({ kind: 'pj-pitch', opt: {}, force: true }); return; }
-    if(a === 'pj-form'){ pj.thumb = ''; openSheet({ kind: b.getAttribute('data-k'), opt: { id: id }, force: true }); return; }
+    if(a === 'pj-form'){ openSheet({ kind: 'pj-task', opt: { id: id }, force: true }); return; }
     if(a === 'pj-task'){
       var tp = pjGet(pj.sel), t = tp && pjItems(tp.id, 'task').find(function(x){ return x.id === id; }); if(!t) return;
       var data = Object.assign({}, t.data, { done: b.checked });
@@ -1094,44 +984,24 @@
       var sp = pjGet(pj.sel); if(!sp) return;
       var to = b.getAttribute('data-st'); if(PJ_MINE.indexOf(to) === -1) return;
       sp.data = Object.assign({}, sp.data, { stage: to });
-      if(await pjSaveProject(sp)){ toast('Moved to ' + pjStage(to)); buzz(); }
+      var rs = await sb.from('projects').update({ data: sp.data }).eq('id', sp.id);
+      if(rs.error) toast(friendlyErr(rs.error)); else { toast('Moved to ' + pjStage(to)); buzz(); }
       renderAll(); return;
     }
     if(a === 'pj-send'){
-      var txt = pjVal('pjMsg'); if(!txt){ toast('Write a message first'); return; }
+      var txt = pjVal('pjMsg'); if(!txt){ toast('Write an update first'); return; }
       var cb = document.getElementById('pjMsgInt');
-      if(await pjAdd(id, 'comment', { text: txt.slice(0, 2000), internal: !!(cb && cb.checked) })){ document.getElementById('pjMsg').value = ''; document.activeElement && document.activeElement.blur && document.activeElement.blur(); toast('Sent'); }
+      if(await pjAdd(id, 'comment', { text: txt.slice(0, 2000), internal: !!(cb && cb.checked) })){ document.getElementById('pjMsg').value = ''; if(document.activeElement && document.activeElement.blur) document.activeElement.blur(); toast('Posted'); }
       renderAll(); return;
     }
-    b.disabled = true;
-    if(a === 'pj-pitch-send'){
-      var title = pjVal('qTitle'); if(!title){ toast('Give your idea a name'); b.disabled = false; return; }
-      var np = { id: 'pj' + pjUid(), designer_id: store.partnerId, client_id: null, created_by: 'designer',
-        data: { title: title.slice(0, 120), stage: 'pitch', brief: pjVal('qBrief').slice(0, 4000), refs: pjVal('qRefs').split('\n').map(function(s){ return s.trim(); }).filter(pjUrl).slice(0, 20), estHours: num(pjVal('qHours')), budgetGrams: Math.round(num(pjVal('qGrams'))), createdAt: new Date().toISOString() } };
-      var rp = await sb.from('projects').insert(np);
-      if(rp.error) toast(friendlyErr(rp.error)); else { pj.list.unshift(np); pj.sel = np.id; ok = true; toast('Pitch sent to Thread Tribe'); }
-    } else if(a === 'pj-task-save'){
-      if(!pjVal('qTitle')){ toast('What’s the step?'); b.disabled = false; return; }
-      ok = await pjAdd(id, 'task', { title: pjVal('qTitle').slice(0, 200), owner: 'designer', due: pjVal('qDue'), done: false });
-    } else if(a === 'pj-proto-save'){
-      var g = Math.round(num(pjVal('qGrams')));
-      if(!g && !pj.thumb && !pjVal('qNotes')){ toast('Add the grams used, a photo or a note'); b.disabled = false; return; }
-      if(pjVal('qLink') && !pjUrl(pjVal('qLink'))){ toast('The link should start with https://'); b.disabled = false; return; }
-      ok = await pjAdd(id, 'proto', { grams: g, hours: num(pjVal('qHours')), color: pjVal('qColor').slice(0, 60), notes: pjVal('qNotes').slice(0, 1000), link: pjVal('qLink'), thumb: pj.thumb || '', internal: !!((pjGet(id) || {}).client_id) });
-      if(ok){ pj.thumb = ''; var pp = pjGet(id); if(pp && ['brief', 'concept', 'cad'].indexOf((pp.data || {}).stage) !== -1){ pp.data = Object.assign({}, pp.data, { stage: 'prototype' }); await pjSaveProject(pp); } }
-    } else if(a === 'pj-file-save'){
-      if(!pjUrl(pjVal('qLink'))){ toast('Paste a full https:// link'); b.disabled = false; return; }
-      ok = await pjAdd(id, 'file', { label: pjVal('qLabel').slice(0, 120) || 'Design file', url: pjVal('qLink'), internal: true });
-    } else if(a === 'pj-req-save'){
-      if(!pjVal('qText')){ toast('Say what you need'); b.disabled = false; return; }
-      ok = await pjAdd(id, 'request', { type: pjVal('qType'), text: pjVal('qText').slice(0, 1000), status: 'open', internal: true });
-    } else if(a === 'pj-hours-save'){
-      var h = num(pjVal('qHours')); if(!(h > 0) || h > 24){ toast('Enter the hours (up to 24 a day)'); b.disabled = false; return; }
-      ok = await pjAdd(id, 'hours', { hours: h, date: pjVal('qDate') || today(), note: pjVal('qNote').slice(0, 300), internal: true });
+    if(a === 'pj-task-save'){
+      if(!pjVal('qTitle')){ toast('What’s the step?'); return; }
+      b.disabled = true;
+      var ok = await pjAdd(id, 'task', { title: pjVal('qTitle').slice(0, 200), owner: 'designer', due: pjVal('qDue'), done: false });
+      b.disabled = false;
+      if(ok){ closeSheet(); buzz(); toast('Step added'); }
+      renderAll();
     }
-    b.disabled = false;
-    if(ok){ ping('report'); closeSheet(); buzz(); if(a !== 'pj-pitch-send') toast('Saved'); }
-    renderAll();
   }
 
   // ---- sheet plumbing (Android back button closes it) ----
