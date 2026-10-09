@@ -479,7 +479,7 @@
   function capacityForm(){
     var c = Object.assign({}, plan.capacity || {}, capDraft || {});
     var off = c.weeklyOff || [0];
-    return '<div class="sheet-h"><div class="t">Your capacity</div><button class="x" data-a="close">✕</button></div>' +
+    return '<div class="sheet-h"><div class="t">Set printer availability</div><button class="x" data-a="close">✕</button></div>' +
       '<div class="muted">Thread Tribe plans jobs around this, so you get work you can finish on time.</div>' +
       '<div class="grid2"><div><label>Printers you can use for us</label><input id="cPrinters" type="number" inputmode="numeric" min="0" value="' + (c.printers != null ? c.printers : ((store.pack.partner && store.pack.partner.printers) || '')) + '"></div>' +
       '<div><label>Print hours per day</label><input id="cHours" type="number" inputmode="numeric" min="0" max="24" value="' + (c.hoursPerDay || 20) + '"></div></div>' +
@@ -574,7 +574,7 @@
         items.push({ w: 2.5, h: act('', '📈', 'Log today’s printing: ' + esc(j.productName), esc(j.jobCode) + ' · ' + printedOf(j.id) + ' of ' + (j.qty || 0) + ' so far' + (f.date && j.dueDate && f.date > j.dueDate ? ' · <b style="color:var(--red)">running late</b>' : ''),
           '<button class="btn primary small" data-a="prog" data-id="' + esc(j.id) + '">Log</button>') });
       });
-      if(!plan.capacity) items.push({ w: 5.5, h: act('', '🗓️', 'Set your capacity', 'Printers, hours and days off — so jobs fit your workshop.', '<button class="btn small" data-a="cap-edit">Set now</button>') });
+      if(!plan.capacity) items.push({ w: 5.5, h: act('', '🗓️', 'Set printer availability', 'Printers, hours and days off — so jobs fit your workshop.', '<button class="btn small" data-a="cap-edit">Set now</button>') });
     }
     // 1. new jobs to accept
     all.filter(function(j){ return j.status === 'assigned'; }).forEach(function(j){
@@ -721,11 +721,11 @@
       '<div class="row"><span>Rate</span><span class="r">₹' + (store.pack.partner.ratePerGram || 0) + '/g</span></div></div>';
     if(!plan.missing){
       var c = plan.capacity;
-      html += '<div class="h2">Your capacity</div><div class="card">' + (c ? '<div class="row"><span>Printers for Thread Tribe</span><span class="r">' + (c.printers || 0) + '</span></div>' +
+      html += '<div class="h2">Set printer availability</div><div class="card">' + (c ? '<div class="row"><span>Printers for Thread Tribe</span><span class="r">' + (c.printers || 0) + '</span></div>' +
         '<div class="row"><span>Print hours a day</span><span class="r">' + (c.hoursPerDay || 0) + '</span></div>' +
         '<div class="row"><span>Days off</span><span class="r" style="font-weight:500;">' + ((c.weeklyOff || []).map(function(i){ return WD[i]; }).join(', ') || 'none') + ((c.daysOff || []).filter(function(d){ return d >= today(); }).length ? ' + ' + (c.daysOff || []).filter(function(d){ return d >= today(); }).length + ' dates' : '') + '</span></div>'
         : '<div class="muted">Not set yet. Thread Tribe plans jobs around your printers and days off.</div>') +
-        '<div class="btns"><button class="btn small' + (c ? '' : ' primary') + '" data-a="cap-edit">' + (c ? 'Change' : 'Set capacity') + '</button></div></div>';
+        '<div class="btns"><button class="btn small' + (c ? '' : ' primary') + '" data-a="cap-edit">' + (c ? 'Change' : 'Set availability') + '</button></div></div>';
     }
     html += '<div class="h2">How you get paid</div><div class="card">' +
       (pr.upi || pr.account_no ? (pr.upi ? '<div class="row"><span>UPI</span><span class="r">' + esc(pr.upi) + '</span></div>' : '') +
@@ -1097,7 +1097,7 @@
       var cap = { printers: Math.max(0, Math.round(num(document.getElementById('cPrinters').value))), hoursPerDay: Math.min(24, Math.max(0, num(document.getElementById('cHours').value))),
         weeklyOff: Array.prototype.map.call(document.querySelectorAll('[data-wd]:checked'), function(x){ return +x.getAttribute('data-wd'); }),
         daysOff: ((plan.capacity && plan.capacity.daysOff) || []).filter(function(x){ return x >= today(); }), updatedAt: new Date().toISOString() };
-      if(await savePlan('capacity', 'main', cap)){ closeSheet(); toast('Capacity saved'); renderAll(); }
+      if(await savePlan('capacity', 'main', cap)){ closeSheet(); toast('Printer availability saved'); renderAll(); }
       return;
     }
     if(a === 'prog-save'){
