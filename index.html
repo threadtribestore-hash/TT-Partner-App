@@ -45,6 +45,11 @@
   .sync.live i{ background:var(--green); box-shadow:0 0 0 3px var(--green-soft); }
   .sync.busy i{ background:var(--amber); }
   .sync.off i{ background:var(--red); }
+  .prof{ position:relative; display:flex; align-items:center; gap:6px; font-size:12.5px; font-weight:600; color:var(--text); background:var(--panel); border:1px solid var(--line); padding:6px 10px; border-radius:20px; white-space:nowrap; cursor:pointer; }
+  .prof .dot{ position:absolute; top:-3px; right:-3px; min-width:16px; height:16px; border-radius:8px; background:var(--red); color:#fff; font-size:10px; display:flex; align-items:center; justify-content:center; padding:0 4px; }
+  .pick{ display:flex; gap:12px; align-items:center; width:100%; text-align:left; background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:14px; margin-top:10px; cursor:pointer; color:var(--text); font:inherit; }
+  .pick.on{ border-color:var(--accent); box-shadow:0 0 0 2px var(--accent-soft); }
+  .pick .ic{ font-size:22px; } .pick .t{ font-weight:700; } .pick .s{ font-size:13px; color:var(--dim); }
 
   /* cards & lists */
   .card{ background:var(--panel); border:1px solid var(--line); border-radius:16px; padding:16px; margin-bottom:12px; box-shadow:var(--shadow); }
@@ -131,7 +136,7 @@
   .bar span{ display:block; height:100%; border-radius:6px; }
 
   /* bottom nav */
-  .nav{ position:fixed; left:0; right:0; bottom:0; z-index:50; background:var(--panel); border-top:1px solid var(--line); padding:6px 4px calc(6px + env(safe-area-inset-bottom)); display:grid; grid-auto-flow:column; grid-auto-columns:1fr; }
+  .nav{ position:fixed; left:0; right:0; bottom:0; z-index:50; background:var(--panel); border-top:1px solid var(--line); padding:6px 4px calc(6px + env(safe-area-inset-bottom)); display:grid; grid-template-columns:repeat(5, 1fr); }
   .nav button{ background:none; border:none; display:flex; flex-direction:column; align-items:center; gap:3px; padding:6px 0; font-size:11.5px; font-weight:600; color:var(--dim); cursor:pointer; position:relative; }
   .nav button svg{ width:24px; height:24px; fill:none; stroke:currentColor; stroke-width:1.9; stroke-linecap:round; stroke-linejoin:round; }
   .nav button.on{ color:var(--accent); }
@@ -174,7 +179,7 @@
 <div class="wrap">
   <div class="top" id="top">
     <div class="top-left"><div class="eyebrow" id="eyebrow">Thread Tribe Partner</div><div class="title" id="title">Welcome</div></div>
-    <button class="sync hidden" id="sync"><i></i><span id="syncText">Live</span></button>
+    <div style="display:flex;gap:8px;align-items:center;flex:none;"><button class="sync hidden" id="sync"><i></i><span id="syncText">Live</span></button><button class="prof hidden" id="prof"></button></div>
   </div>
   <div class="ptr" id="ptr">Release to refresh</div>
   <div id="signin" class="hidden"></div>
@@ -184,7 +189,6 @@
 <nav class="nav hidden" id="nav">
   <button data-tab="today"><svg viewBox="0 0 24 24"><path d="M3 11l9-7 9 7"/><path d="M5 10v10h14V10"/></svg>Today</button>
   <button data-tab="jobs"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8 9h8M8 13h8M8 17h5"/></svg>Jobs</button>
-  <button data-tab="projects" style="display:none"><svg viewBox="0 0 24 24"><path d="M9 18h6M10 21h4"/><path d="M12 3a6 6 0 0 0-3.5 10.9c.6.5 1 1.2 1 2.1h5c0-.9.4-1.6 1-2.1A6 6 0 0 0 12 3z"/></svg>Projects</button>
   <button data-tab="filament"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="2.5"/><path d="M12 4v5.5M12 14.5V20"/></svg>Filament</button>
   <button data-tab="money"><svg viewBox="0 0 24 24"><path d="M7 5h10M7 9h10M7 5c5 0 5 8 0 8l7 6"/></svg>Money</button>
   <button data-tab="me"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 20c1.5-4 4.5-6 8-6s6.5 2 8 6"/></svg>Me</button>
@@ -218,7 +222,7 @@
       var s = JSON.parse(localStorage.getItem(KEY));
       if(s && typeof s === 'object'){
         // Old job-pack-file copies can't sync, so only live data is kept.
-        if(s.mode === 'cloud' && s.pack) store = Object.assign(store, { pack: s.pack, edits: s.edits || {}, partnerId: s.partnerId || '', email: s.email || '', requests: s.requests || [], profile: s.profile || null, seenPay: s.seenPay || {} });
+        if(s.mode === 'cloud' && s.pack) store = Object.assign(store, { view: s.view === 'designer' ? 'designer' : 'partner', pack: s.pack, edits: s.edits || {}, partnerId: s.partnerId || '', email: s.email || '', requests: s.requests || [], profile: s.profile || null, seenPay: s.seenPay || {} });
         else store.email = s.email || '';
       }
     }catch(e){}
@@ -613,7 +617,7 @@
     });
     // 5b. design projects
     var pt = isDesigner() ? pjTodo() : [];
-    if(pt.length) items.push({ w: 2.2, h: act('warn', '💡', pt.length + ' project step' + (pt.length === 1 ? '' : 's') + ' due soon', pt.slice(0, 2).map(function(x){ return esc(x.t.data.title); }).join(' · '), '<button class="btn small" data-a="tab" data-tab="projects">Open projects</button>') });
+    if(pt.length) items.push({ w: 2.2, h: act('warn', '✏️', pt.length + ' thing' + (pt.length === 1 ? '' : 's') + ' to do as Designer', pt.slice(0, 2).map(function(x){ return esc(x.t.data.title); }).join(' · '), '<button class="btn small" data-a="mode" data-m="designer">Switch to Designer</button>') });
     // 6. setup
     var pr = store.profile || {};
     if(!cloud.missing && !(pr.upi || pr.account_no)) items.push({ w: 6, h: act('', '🏦', 'Add your UPI ID', 'So Thread Tribe can pay you straight away.', '<button class="btn small" data-a="profile">Add now</button>') });
@@ -820,6 +824,7 @@
   function formSheet(kind, opt){
     opt = opt || {};
     if(kind.indexOf('pj-') === 0) return pjForm(kind, opt);
+    if(kind === 'switch') return switchSheet();
     var p = (store.pack && store.pack.payout) || {};
     if(kind === 'req-pay') return '<div class="sheet-h"><div class="t">Request payout</div><button class="x" data-a="close">✕</button></div>' +
       '<div class="muted">You can ask for up to ' + money(p.outstanding) + '.</div>' +
@@ -865,7 +870,15 @@
   // The designer can move a project forward up to Approval; Live is Thread Tribe's call.
   var PJ_MINE = ['design', 'prototype', 'approval'];
   var pj = { list: [], items: {}, missing: false, sel: null, chan: null };
-  function isDesigner(){ return !!(store.pack && store.pack.designer) || pj.list.length > 0; }
+  // Designer access is a setting Thread Tribe switches on per partner in Studio (Projects → Designers).
+  function isDesigner(){ return !!(store.pack && store.pack.designer); }
+  function inDesigner(){ return store.view === 'designer' && isDesigner(); }
+  function switchSheet(){
+    var tp = pjTodo().length, tj = badgeCounts().today;
+    var opt = function(m, ic, t, sub, n){ return '<button class="pick' + ((inDesigner() ? 'designer' : 'partner') === m ? ' on' : '') + '" data-a="mode" data-m="' + m + '"><span class="ic">' + ic + '</span><span style="flex:1;"><span class="t" style="display:block;">' + t + (n ? ' <span class="chip late">' + n + '</span>' : '') + '</span><span class="s">' + sub + '</span></span>' + ((inDesigner() ? 'designer' : 'partner') === m ? '<span style="color:var(--accent);font-weight:700;">✓</span>' : '') + '</button>'; };
+    return '<div class="sheet-h"><div class="t">Switch profile</div><button class="x" data-a="close">✕</button></div>' +
+      opt('partner', '🖨️', 'Print partner', 'Jobs, filament and payouts', tj) + opt('designer', '✏️', 'Designer', 'Custom design projects and your steps', tp);
+  }
   function pjUid(){ return Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
   function pjWhen(s){ var d = new Date(s); return isNaN(d) ? '' : d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }); }
   function pjSt(p){ var s = (p.data || {}).stage || 'brief'; return PJ_OLD[s] || s; }
@@ -1103,7 +1116,7 @@
     var p = (store.pack && store.pack.payout) || {};
     return {
       today: jobs().filter(function(j){ return j.status === 'assigned'; }).length + (p.payments || []).filter(function(x){ return !ackFor(x.id) && !store.seenPay[x.id]; }).slice(0, 5).length,
-      projects: pjTodo().length, jobs: 0, filament: filamentNeeds().filter(function(f){ return f.short >= 100; }).length, money: 0, me: (store.profile && (store.profile.upi || store.profile.account_no)) || cloud.missing ? 0 : 1
+      jobs: 0, filament: filamentNeeds().filter(function(f){ return f.short >= 100; }).length, money: 0, me: (store.profile && (store.profile.upi || store.profile.account_no)) || cloud.missing ? 0 : 1
     };
   }
   function renderAll(){
@@ -1112,23 +1125,27 @@
     var ready = !!(session && store.pack);
     var cachedOnly = !session && store.pack && cloud.booting;
     if(ready || cachedOnly){
-      signin.classList.add('hidden'); screen.classList.remove('hidden'); nav.classList.remove('hidden');
+      var dz = inDesigner();
+      signin.classList.add('hidden'); screen.classList.remove('hidden'); nav.classList.toggle('hidden', dz);
       document.getElementById('title').textContent = store.pack.partner.name || 'Partner';
+      document.getElementById('eyebrow').textContent = dz ? 'Thread Tribe Designer' : 'Thread Tribe Partner' + (CFG.instanceName ? ' · ' + CFG.instanceName : '');
+      var pf = document.getElementById('prof');
+      pf.classList.toggle('hidden', !isDesigner());
+      if(isDesigner()){ var other = dz ? badgeCounts().today : pjTodo().length; pf.innerHTML = (dz ? '✏️ Designer' : '🖨️ Partner') + ' ▾' + (other ? '<span class="dot">' + other + '</span>' : ''); }
       var ae = document.activeElement;
       if(!(ae && screen.contains(ae) && /INPUT|TEXTAREA/.test(ae.tagName))){
-        screen.innerHTML = tab === 'projects' ? projectsHtml() : tab === 'jobs' ? jobsHtml() : tab === 'filament' ? filamentHtml() : tab === 'money' ? moneyHtml() : tab === 'me' ? meHtml() : todayHtml();
+        screen.innerHTML = dz ? projectsHtml() : tab === 'jobs' ? jobsHtml() : tab === 'filament' ? filamentHtml() : tab === 'money' ? moneyHtml() : tab === 'me' ? meHtml() : todayHtml();
       }
       var b = badgeCounts();
       nav.querySelectorAll('button').forEach(function(btn){
         var t = btn.getAttribute('data-tab');
-        if(t === 'projects') btn.style.display = isDesigner() ? '' : 'none';
         btn.classList.toggle('on', t === tab);
         var old = btn.querySelector('.badge'); if(old) old.remove();
         if(b[t]){ var s = document.createElement('span'); s.className = 'badge'; s.textContent = b[t]; btn.appendChild(s); }
       });
       renderSheet();
     } else {
-      screen.classList.add('hidden'); nav.classList.add('hidden'); signin.classList.remove('hidden');
+      screen.classList.add('hidden'); nav.classList.add('hidden'); signin.classList.remove('hidden'); document.getElementById('prof').classList.add('hidden');
       document.getElementById('title').textContent = 'Welcome';
       renderSignin();
     }
@@ -1235,6 +1252,7 @@
     var b = e.target.closest('[data-a]'); if(!b) return;
     var a = b.getAttribute('data-a'), id = b.getAttribute('data-id');
     if(a.indexOf('pj-') === 0){ await pjAction(a, b, id); return; }
+    if(a === 'mode'){ store.view = b.getAttribute('data-m') === 'designer' ? 'designer' : 'partner'; save(); closeSheet(); renderAll(); window.scrollTo(0, 0); buzz(); toast(store.view === 'designer' ? 'Switched to Designer' : 'Switched to Print partner'); return; }
     if(a === 'tab'){ setTab(b.getAttribute('data-tab')); return; }
     if(a === 'seg'){ jobSeg = b.getAttribute('data-seg'); renderAll(); return; }
     if(a === 'job'){ openSheet({ kind: 'job', id: id, force: true }); return; }
@@ -1364,6 +1382,7 @@
   document.getElementById('sheet').addEventListener('click', onAction);
   document.getElementById('scrim').addEventListener('click', function(){ closeSheet(); });
   document.getElementById('sync').addEventListener('click', function(){ if(cloud.status === 'error' || cloud.status === 'offline'){ scheduleSave(); refresh(); } else setTab('me'); });
+  document.getElementById('prof').addEventListener('click', function(){ openSheet({ kind: 'switch', force: true }); });
   document.getElementById('nav').addEventListener('click', function(e){ var b = e.target.closest('[data-tab]'); if(b) setTab(b.getAttribute('data-tab')); });
   function setTab(t){ tab = t; closeSheet(); renderAll(); window.scrollTo(0, 0); }
 
