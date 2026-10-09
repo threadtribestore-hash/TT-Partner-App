@@ -892,7 +892,11 @@
   var pjT = null;
   function pjSoon(){ clearTimeout(pjT); pjT = setTimeout(function(){ loadProjects().then(renderAll); }, 500); }
   function pjGet(id){ return pj.list.find(function(p){ return p.id === id; }); }
-  function pjItems(id, kind){ return (pj.items[id] || []).filter(function(x){ return x.kind === kind; }); }
+  function pjByDue(a, b){ return (a.data.due || '9999').localeCompare(b.data.due || '9999') || ((a.data.at || '').localeCompare(b.data.at || '')); }
+  function pjItems(id, kind){ var l = (pj.items[id] || []).filter(function(x){ return x.kind === kind; }); return kind === 'task' ? l.sort(pjByDue) : l; }
+  // Thread Tribe starts each project with its own steps; the designer adds theirs.
+  function pjNeedsPlan(p){ return ['live', 'cancelled', 'on_hold'].indexOf(pjSt(p)) === -1 && !pjItems(p.id, 'task').some(function(t){ return t.data.owner !== 'tt'; }); }
+  var PJ_SUGGEST = [['Concept sketches', 3], ['CAD model', 7], ['First prototype print', 10], ['Revisions after feedback', 14], ['Final print-ready files', 18]];
   function pjProg(id){ var ts = pjItems(id, 'task'); return { done: ts.filter(function(t){ return t.data.done; }).length, total: ts.length }; }
   function pjBar(pr){ return pr.total ? '<div class="bar"><span style="width:' + Math.round(100 * pr.done / pr.total) + '%;background:var(--green);"></span></div><div class="hint">' + pr.done + ' of ' + pr.total + ' steps done</div>' : ''; }
   // The designer's own steps that are late or due within 2 days.
@@ -900,12 +904,13 @@
     var out = [];
     pj.list.forEach(function(p){
       if(['live', 'cancelled', 'on_hold'].indexOf(pjSt(p)) !== -1) return;
+      if(pjNeedsPlan(p)){ out.push({ p: p, plan: true, t: { data: { title: 'Plan your steps for ' + ((p.data || {}).title || 'a new project') } }, d: -1 }); return; }
       pjItems(p.id, 'task').forEach(function(t){
         var du = daysUntil(t.data.due);
         if(!t.data.done && t.data.owner !== 'tt' && du != null && du <= 2) out.push({ p: p, t: t, d: du });
       });
     });
-    return out;
+    return out.sort(function(a, b){ return (b.plan ? 1 : 0) - (a.plan ? 1 : 0) || a.d - b.d; });
   }
   function pjCard(p){
     var d = p.data || {}, next = pjItems(p.id, 'task').find(function(t){ return !t.data.done; });
@@ -918,7 +923,8 @@
     if(pj.sel && pjGet(pj.sel)) return projectHtml(pjGet(pj.sel));
     var open = pj.list.filter(function(p){ return ['live', 'cancelled'].indexOf(pjSt(p)) === -1; }), done = pj.list.filter(function(p){ return open.indexOf(p) === -1; });
     var html = '', todo = pjTodo();
-    if(todo.length) html += '<div class="h2">Due soon<span class="count">' + todo.length + '</span></div>' + todo.map(function(x){
+    if(todo.length) html += '<div class="h2">To do<span class="count">' + todo.length + '</span></div>' + todo.map(function(x){
+      if(x.plan) return act('', '🗓️', 'Plan your steps: ' + esc((x.p.data || {}).title || 'new project'), 'Add the steps you’ll take and when — Thread Tribe has added theirs.', '<button class="btn primary small" data-a="pj-plan" data-id="' + esc(x.p.id) + '">Plan steps</button>');
       return act(x.d < 0 ? 'bad' : 'warn', '✏️', esc(x.t.data.title), esc((x.p.data || {}).title) + ' · ' + (x.d < 0 ? (-x.d) + ' day' + (x.d === -1 ? '' : 's') + ' late' : x.d === 0 ? 'due today' : 'due ' + fmtDate(x.t.data.due)), '<button class="btn small" data-a="pj-open" data-id="' + esc(x.p.id) + '">Open</button>');
     }).join('');
     html += '<div class="h2">Projects<span class="count">' + open.length + '</span></div>' + (open.length ? open.map(pjCard).join('') : '<div class="card empty"><b>No projects yet</b>Thread Tribe will add you to one.</div>');
@@ -937,6 +943,7 @@
     html += (d.brief ? '<div style="white-space:pre-wrap;margin-top:12px;">' + esc(d.brief) + '</div>' : '') + '</div>';
     var tasks = pjItems(p.id, 'task');
     html += '<div class="h2">Steps<span class="count">' + tasks.filter(function(t){ return !t.data.done; }).length + '</span></div><div class="card">' + pjBar(pjProg(p.id)) +
+      (pjNeedsPlan(p) ? '<div class="note info" style="margin:0 0 10px;">Thread Tribe has added their steps. Add yours with dates so everyone can see the plan.<div class="btns"><button class="btn primary small" data-a="pj-plan" data-id="' + esc(p.id) + '">Plan your steps</button></div></div>' : '') +
       (tasks.length ? tasks.map(function(t){
         var du = daysUntil(t.data.due);
         return '<label class="row" style="margin:0;cursor:pointer;"><span style="display:flex;gap:10px;align-items:center;"><input type="checkbox" style="width:auto;" data-a="pj-task" data-id="' + esc(t.id) + '"' + (t.data.done ? ' checked' : '') + '><span style="color:var(--text);' + (t.data.done ? 'text-decoration:line-through;opacity:.6;' : '') + '">' + esc(t.data.title) + '</span></span>' +
@@ -953,7 +960,16 @@
       '<div class="btns"><button class="btn primary small" data-a="pj-send" data-id="' + esc(p.id) + '">Post</button></div></div>';
     return html;
   }
+  function pjAddDays(n){ var d = new Date(); d.setDate(d.getDate() + n); return iso(d); }
+  function pjPlanRow(title, due){ return '<div class="grid2 pj-prow" style="grid-template-columns:1fr 150px;align-items:center;margin-top:8px;"><input class="pj-pt" value="' + esc(title || '') + '" placeholder="Step"><input class="pj-pd" type="date" value="' + esc(due || '') + '"></div>'; }
   function pjForm(kind, opt){
+    if(kind === 'pj-plan'){
+      var pp = pjGet(opt.id) || {}, dd = (pp.data || {}).due, rows = PJ_SUGGEST.map(function(x){ var d = pjAddDays(x[1]); return pjPlanRow(x[0], dd && d > dd ? dd : d); }).join('');
+      return '<div class="sheet-h"><div class="t">Plan your steps</div><button class="x" data-a="close">✕</button></div>' +
+        '<div class="muted">' + esc((pp.data || {}).title || '') + (dd ? ' · due ' + fmtDate(dd) : '') + '. Edit the suggestions, set dates, and clear any you don’t need.</div>' +
+        '<div id="pjRows">' + rows + '</div><button class="link" data-a="pj-plan-row">+ Another step</button>' +
+        '<button class="btn primary block" data-a="pj-plan-save" data-id="' + esc(opt.id || '') + '" style="margin-top:12px;">Save plan</button>';
+    }
     return '<div class="sheet-h"><div class="t">Add a step</div><button class="x" data-a="close">✕</button></div>' +
       '<label>What</label><input id="qTitle" placeholder="e.g. First CAD draft">' +
       '<label>Due</label><input id="qDue" type="date" min="' + today() + '">' +
@@ -973,6 +989,18 @@
     if(a === 'pj-open'){ pj.sel = id; renderAll(); window.scrollTo(0, 0); return; }
     if(a === 'pj-back'){ pj.sel = null; renderAll(); return; }
     if(a === 'pj-form'){ openSheet({ kind: 'pj-task', opt: { id: id }, force: true }); return; }
+    if(a === 'pj-plan'){ openSheet({ kind: 'pj-plan', opt: { id: id }, force: true }); return; }
+    if(a === 'pj-plan-row'){ var box = document.getElementById('pjRows'); if(box) box.insertAdjacentHTML('beforeend', pjPlanRow('', '')); return; }
+    if(a === 'pj-plan-save'){
+      var rows = Array.prototype.map.call(document.querySelectorAll('.pj-prow'), function(r){ return { title: r.querySelector('.pj-pt').value.trim(), due: r.querySelector('.pj-pd').value }; }).filter(function(r){ return r.title; });
+      if(!rows.length){ toast('Add at least one step'); return; }
+      b.disabled = true;
+      var okAll = true;
+      for(var i = 0; i < rows.length; i++){ if(!(await pjAdd(id, 'task', { title: rows[i].title.slice(0, 200), owner: 'designer', due: rows[i].due, done: false }))){ okAll = false; break; } }
+      b.disabled = false;
+      if(okAll){ closeSheet(); buzz(); toast('Plan saved — Thread Tribe can see it'); pj.sel = id; }
+      renderAll(); return;
+    }
     if(a === 'pj-task'){
       var tp = pjGet(pj.sel), t = tp && pjItems(tp.id, 'task').find(function(x){ return x.id === id; }); if(!t) return;
       var data = Object.assign({}, t.data, { done: b.checked });
