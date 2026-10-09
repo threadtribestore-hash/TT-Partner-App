@@ -1121,7 +1121,7 @@
       if(ok){ pj.thumb = ''; var pp = pjGet(id); if(pp && ['brief', 'concept', 'cad'].indexOf((pp.data || {}).stage) !== -1){ pp.data = Object.assign({}, pp.data, { stage: 'prototype' }); await pjSaveProject(pp); } }
     } else if(a === 'pj-file-save'){
       if(!pjUrl(pjVal('qLink'))){ toast('Paste a full https:// link'); b.disabled = false; return; }
-      ok = await pjAdd(id, 'file', { label: pjVal('qLabel').slice(0, 120) || 'Design file', url: pjVal('qLink') });
+      ok = await pjAdd(id, 'file', { label: pjVal('qLabel').slice(0, 120) || 'Design file', url: pjVal('qLink'), internal: true });
     } else if(a === 'pj-req-save'){
       if(!pjVal('qText')){ toast('Say what you need'); b.disabled = false; return; }
       ok = await pjAdd(id, 'request', { type: pjVal('qType'), text: pjVal('qText').slice(0, 1000), status: 'open', internal: true });
