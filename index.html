@@ -889,7 +889,7 @@
     if(r.error){ pj.missing = /projects|does not exist|schema cache|relation/i.test(r.error.message || ''); return; }
     pj.missing = false; pj.list = r.data || []; pj.items = {};
     if(pj.list.length){
-      var it = await sb.from('project_items').select('project_id,id,kind,author,data').in('project_id', pj.list.map(function(p){ return p.id; })).in('kind', ['task', 'comment']).eq('deleted', false);
+      var it = await sb.from('project_items').select('project_id,id,kind,author,data').in('project_id', pj.list.map(function(p){ return p.id; })).in('kind', ['task', 'comment', 'image']).eq('deleted', false);
       (it.data || []).forEach(function(x){ (pj.items[x.project_id] = pj.items[x.project_id] || []).push(x); });
       Object.keys(pj.items).forEach(function(k){ pj.items[k].sort(function(a, b){ return ((a.data && a.data.at) || '').localeCompare((b.data && b.data.at) || ''); }); });
     }
@@ -953,7 +953,11 @@
     var nextSt = PJ_STAGES[idx + 1];
     if(nextSt && PJ_MINE.indexOf(nextSt[0]) !== -1) html += '<div class="btns"><button class="btn primary small" data-a="pj-stage" data-st="' + nextSt[0] + '">Move to ' + nextSt[1] + '</button></div>';
     else if(st === 'approval') html += '<div class="hint">Waiting for approval. Thread Tribe marks it live.</div>';
-    html += (d.brief ? '<div style="white-space:pre-wrap;margin-top:12px;">' + esc(d.brief) + '</div>' : '') + '</div>';
+    html += (d.brief ? '<div style="white-space:pre-wrap;margin-top:12px;">' + esc(d.brief) + '</div>' : '') +
+      ([d.qty ? d.qty + ' pcs' : '', d.targetPrice ? 'target ₹' + d.targetPrice + '/pc' : ''].filter(Boolean).length ? '<div class="hint">' + [d.qty ? d.qty + ' pcs' : '', d.targetPrice ? 'target ₹' + d.targetPrice + '/pc' : ''].filter(Boolean).join(' · ') + '</div>' : '') + '</div>';
+    var imgs = pjItems(p.id, 'image').filter(function(x){ return typeof (x.data || {}).img === 'string' && /^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+\/=]+$/.test(x.data.img); }), refs = (d.refs || []).filter(function(u){ return /^https?:\/\/[^\s"'<>]+$/i.test(u); });
+    if(imgs.length || refs.length) html += '<div class="h2">References</div><div class="card">' + (imgs.length ? '<div style="display:flex;gap:8px;flex-wrap:wrap;">' + imgs.map(function(x){ return '<img src="' + x.data.img + '" alt="" data-a="pj-zoom" style="width:96px;height:96px;object-fit:cover;border-radius:12px;cursor:zoom-in;">'; }).join('') + '</div>' : '') +
+      refs.map(function(u){ return '<div><a class="link" href="' + esc(u) + '" target="_blank" rel="noopener">' + esc(u.replace(/^https?:\/\//, '').slice(0, 48)) + ' ↗</a></div>'; }).join('') + '</div>';
     var tasks = pjItems(p.id, 'task');
     html += '<div class="h2">Steps<span class="count">' + tasks.filter(function(t){ return !t.data.done; }).length + '</span></div><div class="card">' + pjBar(pjProg(p.id)) +
       (pjNeedsPlan(p) ? '<div class="note info" style="margin:0 0 10px;">Thread Tribe has added their steps. Add yours with dates so everyone can see the plan.<div class="btns"><button class="btn primary small" data-a="pj-plan" data-id="' + esc(p.id) + '">Plan your steps</button></div></div>' : '') +
@@ -976,6 +980,7 @@
   function pjAddDays(n){ var d = new Date(); d.setDate(d.getDate() + n); return iso(d); }
   function pjPlanRow(title, due){ return '<div class="grid2 pj-prow" style="grid-template-columns:1fr 150px;align-items:center;margin-top:8px;"><input class="pj-pt" value="' + esc(title || '') + '" placeholder="Step"><input class="pj-pd" type="date" value="' + esc(due || '') + '"></div>'; }
   function pjForm(kind, opt){
+    if(kind === 'pj-zoom') return '<div class="sheet-h"><div class="t">Reference</div><button class="x" data-a="close">✕</button></div>' + (/^data:image\//.test(opt.src || '') ? '<img src="' + opt.src + '" alt="" style="width:100%;border-radius:12px;">' : '');
     if(kind === 'pj-plan'){
       var pp = pjGet(opt.id) || {}, dd = (pp.data || {}).due, rows = PJ_SUGGEST.map(function(x){ var d = pjAddDays(x[1]); return pjPlanRow(x[0], dd && d > dd ? dd : d); }).join('');
       return '<div class="sheet-h"><div class="t">Plan your steps</div><button class="x" data-a="close">✕</button></div>' +
@@ -1001,6 +1006,7 @@
   async function pjAction(a, b, id){
     if(a === 'pj-open'){ pj.sel = id; renderAll(); window.scrollTo(0, 0); return; }
     if(a === 'pj-back'){ pj.sel = null; renderAll(); return; }
+    if(a === 'pj-zoom'){ openSheet({ kind: 'pj-zoom', opt: { src: b.getAttribute('src') }, force: true }); return; }
     if(a === 'pj-form'){ openSheet({ kind: 'pj-task', opt: { id: id }, force: true }); return; }
     if(a === 'pj-plan'){ openSheet({ kind: 'pj-plan', opt: { id: id }, force: true }); return; }
     if(a === 'pj-plan-row'){ var box = document.getElementById('pjRows'); if(box) box.insertAdjacentHTML('beforeend', pjPlanRow('', '')); return; }
