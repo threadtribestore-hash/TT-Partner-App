@@ -161,6 +161,9 @@
   .signin h1{ font-size:26px; letter-spacing:-0.4px; margin-bottom:6px; }
   .err{ color:var(--red); font-size:13.5px; margin-top:10px; min-height:18px; }
 
+  .wd{ display:flex; gap:6px; flex-wrap:wrap; }
+  .wdc{ display:flex; align-items:center; gap:4px; margin:0; padding:6px 10px; border:1px solid var(--line); border-radius:10px; background:var(--panel); font-size:13px; color:var(--text); }
+  .wdc input{ width:auto; }
   .toast{ position:fixed; left:50%; bottom:calc(86px + env(safe-area-inset-bottom)); transform:translateX(-50%) translateY(20px); background:var(--text); color:var(--bg); padding:11px 18px; border-radius:12px; font-size:14px; font-weight:600;
     opacity:0; transition:all .2s; z-index:200; max-width:calc(100% - 32px); text-align:center; pointer-events:none; }
   .toast.show{ opacity:1; transform:translateX(-50%); }
@@ -292,6 +295,7 @@
     cloud.status = 'ok'; cloud.lastRefresh = Date.now();
     takePack(row.pack, row.partner_id);
     try{ await loadInbox(row.partner_id); }catch(e){}
+    try{ await loadPlan(row.partner_id); }catch(e){}
     if(dirtyCount()) scheduleSave();
     renderAll();
   }
@@ -393,6 +397,107 @@
       try{ if(navigator.vibrate) navigator.vibrate(80); }catch(e){}
     }
   }
+  // ---- planning: capacity, daily progress, pickups (partner_docs, private to this partner) ----
+  var plan = { capacity: null, progress: {}, pickup: {}, missing: false };
+  var WD = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  var MODES = { pickup: 'Courier pickup from my workshop', direct: 'I’ll ship it to the customer', drop: 'I’ll drop it at Thread Tribe' };
+  async function loadPlan(pid){
+    var r = await sb.from('partner_docs').select('coll,id,data').eq('partner_id', pid).eq('deleted', false);
+    if(r.error){ plan.missing = /partner_docs|does not exist|schema cache|relation/i.test(r.error.message || ''); return; }
+    plan.missing = false; plan.capacity = null; plan.progress = {}; plan.pickup = {};
+    (r.data || []).forEach(function(x){
+      if(x.coll === 'capacity') plan.capacity = x.data;
+      else if(x.coll === 'progress') plan.progress[x.id] = x.data;
+      else if(x.coll === 'pickup') plan.pickup[x.id] = x.data;
+    });
+  }
+  async function savePlan(coll, id, data){
+    if(!session){ toast('Sign in again to save this'); return false; }
+    var r = await sb.from('partner_docs').upsert({ partner_id: store.partnerId, coll: coll, id: id, data: data, deleted: false }, { onConflict: 'partner_id,coll,id' });
+    if(r.error){ toast(friendlyErr(r.error)); return false; }
+    if(coll === 'capacity') plan.capacity = data; else plan[coll][id] = data;
+    ping('report');
+    return true;
+  }
+  function logsOf(jid){ return Object.keys(plan.progress).map(function(k){ return plan.progress[k]; }).filter(function(x){ return x.jobId === jid; }).sort(function(a, b){ return (b.date || '').localeCompare(a.date || ''); }); }
+  function printedOf(jid){ return logsOf(jid).reduce(function(t, x){ return t + (+x.printed || 0); }, 0); }
+  function paceOf(jid){ var l = logsOf(jid).filter(function(x){ return +x.printed > 0; }).slice(0, 3); return l.length >= 2 ? l.reduce(function(t, x){ return t + (+x.printed || 0); }, 0) / l.length : 0; }
+  function forecastOf(j){
+    var left = Math.max(0, (j.qty || 0) - printedOf(j.id));
+    if(!left) return { date: today(), left: 0 };
+    var pace = paceOf(j.id);
+    if(pace > 0) return { date: addDays(Math.max(0, Math.ceil(left / pace) - 1)), left: left, basis: 'your pace' };
+    var c = plan.capacity;
+    if(c && +c.printers > 0 && +c.hoursPerDay > 0 && +j.hoursPerUnit > 0){
+      var hours = left * j.hoursPerUnit, d = 0, day = 0;
+      while(hours > 0 && day < 120){ var dt = addDays(day); var wd = new Date(dt + 'T00:00:00').getDay(); if((c.weeklyOff || []).indexOf(wd) === -1 && (c.daysOff || []).indexOf(dt) === -1) hours -= c.printers * c.hoursPerDay; day++; d = day; }
+      return { date: addDays(Math.max(0, d - 1)), left: left, basis: 'your capacity' };
+    }
+    return { date: '', left: left };
+  }
+  function progressCard(j){
+    if(plan.missing || ['accepted', 'printing'].indexOf(j.status) === -1) return '';
+    var made = printedOf(j.id), qty = j.qty || 0, pct = qty ? Math.min(100, Math.round(100 * made / qty)) : 0, f = forecastOf(j), tl = plan.progress[j.id + '|' + today()];
+    var late = f.date && j.dueDate && f.date > j.dueDate;
+    return '<div class="h2" style="margin-left:0;">Progress</div><div class="card" style="margin:0;"><div class="row"><span>' + made + ' of ' + qty + ' printed</span><span class="r">' + pct + '%</span></div>' +
+      '<div class="bar"><span style="width:' + pct + '%; background:var(--accent);"></span></div>' +
+      (f.date ? '<div class="note ' + (late ? 'bad' : 'good') + '">' + (f.left ? 'At ' + f.basis + ', done by <b>' + fmtDate(f.date) + '</b>' + (j.dueDate ? (late ? ' — after the due date (' + fmtDate(j.dueDate) + '). Tell Thread Tribe early.' : ' — before the due date (' + fmtDate(j.dueDate) + ').') : '') : 'All pieces printed.') + '</div>'
+        : '<div class="hint">Log what you print each day and the app forecasts your finish date.</div>') +
+      '<div class="btns"><button class="btn primary small" data-a="prog" data-id="' + esc(j.id) + '">' + (tl ? 'Update today (' + (tl.printed || 0) + ')' : 'Log today’s printing') + '</button></div></div>';
+  }
+  function pickupCard(j){
+    if(plan.missing || ['accepted', 'printing', 'shipped'].indexOf(j.status) === -1) return '';
+    var b = plan.pickup[j.id];
+    if(!b) return '<div class="h2" style="margin-left:0;">Pickup / shipping</div><div class="card" style="margin:0;"><div class="muted">Book a courier pickup, or tell Thread Tribe how you’ll send it.</div><div class="btns"><button class="btn small" data-a="pk" data-id="' + esc(j.id) + '">Book pickup / shipment</button></div></div>';
+    return '<div class="h2" style="margin-left:0;">Pickup / shipping</div><div class="card" style="margin:0;"><div class="row"><span>' + esc(MODES[b.mode] || b.mode) + '</span><span class="r">' + fmtDate(b.date) + (b.slot ? ' · ' + esc(b.slot) : '') + '</span></div>' +
+      '<div class="row"><span class="muted">Packed</span><span class="r">' + (b.boxes || '?') + ' box' + (+b.boxes === 1 ? '' : 'es') + (b.weightKg ? ' · ' + b.weightKg + ' kg' : '') + '</span></div>' +
+      (b.confirmedAt ? '<div class="note good">Confirmed by Thread Tribe' + (b.courier ? ' · ' + esc(b.courier) : '') + (b.awb ? ' · AWB ' + esc(b.awb) : '') + '</div>' : '<div class="note warn">Waiting for Thread Tribe to confirm.</div>') +
+      '<div class="btns"><button class="btn small" data-a="pk" data-id="' + esc(j.id) + '">Change</button></div></div>';
+  }
+  function progressForm(j){
+    var tl = plan.progress[j.id + '|' + today()] || {};
+    return '<div class="h2" style="margin-left:0;">Today’s printing · ' + fmtDate(today()) + '</div>' +
+      '<div class="grid2"><div><label>Pieces printed today</label><input id="gPrinted" type="number" inputmode="numeric" min="0" value="' + (tl.printed || '') + '" placeholder="0"></div>' +
+      '<div><label>Failed today</label><input id="gFailed" type="number" inputmode="numeric" min="0" value="' + (tl.failed || '') + '" placeholder="0"></div></div>' +
+      '<div class="hint">' + printedOf(j.id) + ' of ' + (j.qty || 0) + ' logged so far. Logging again today replaces today’s numbers.</div>' +
+      '<button class="btn primary block" data-a="prog-save" data-id="' + esc(j.id) + '" style="margin-top:14px;">Save</button><button class="btn ghost block" data-a="job" data-id="' + esc(j.id) + '" style="margin-top:8px;">Cancel</button>';
+  }
+  function pickupForm(j){
+    var b = plan.pickup[j.id] || {}, st = j.shipTo || {};
+    return '<div class="h2" style="margin-left:0;">Pickup / shipping</div>' +
+      '<label>How will it go?</label><select id="kMode">' + Object.keys(MODES).map(function(k){ return '<option value="' + k + '"' + ((b.mode || (st.address ? 'direct' : 'pickup')) === k ? ' selected' : '') + '>' + MODES[k] + '</option>'; }).join('') + '</select>' +
+      '<div class="grid2"><div><label>Date</label><input id="kDate" type="date" min="' + today() + '" value="' + esc(b.date || j.dueDate || today()) + '"></div><div><label>Time</label><select id="kSlot">' + ['Morning (9–12)', 'Afternoon (12–4)', 'Evening (4–7)'].map(function(s){ return '<option' + (b.slot === s ? ' selected' : '') + '>' + s + '</option>'; }).join('') + '</select></div></div>' +
+      '<div class="grid2"><div><label>Boxes</label><input id="kBoxes" type="number" inputmode="numeric" min="1" value="' + (b.boxes || 1) + '"></div><div><label>Weight (kg)</label><input id="kKg" type="number" inputmode="decimal" min="0" step="0.5" value="' + (b.weightKg || Math.max(0.5, Math.round((j.qty || 0) * (j.gramsPerUnit || 0) / 100) / 10)) + '"></div></div>' +
+      '<label>Note (optional)</label><input id="kNote" value="' + esc(b.notes || '') + '" placeholder="e.g. call before coming, gate 2">' +
+      '<button class="btn primary block" data-a="pk-save" data-id="' + esc(j.id) + '" style="margin-top:14px;">' + (plan.pickup[j.id] ? 'Update booking' : 'Book') + '</button><button class="btn ghost block" data-a="job" data-id="' + esc(j.id) + '" style="margin-top:8px;">Cancel</button>';
+  }
+  var capDraft = null;
+  function capKeep(){
+    var pEl = document.getElementById('cPrinters'), hEl = document.getElementById('cHours');
+    capDraft = { printers: pEl ? pEl.value : '', hoursPerDay: hEl ? hEl.value : '', weeklyOff: Array.prototype.map.call(document.querySelectorAll('[data-wd]:checked'), function(x){ return +x.getAttribute('data-wd'); }) };
+  }
+  function capacityForm(){
+    var c = Object.assign({}, plan.capacity || {}, capDraft || {});
+    var off = c.weeklyOff || [0];
+    return '<div class="sheet-h"><div class="t">Your capacity</div><button class="x" data-a="close">✕</button></div>' +
+      '<div class="muted">Thread Tribe plans jobs around this, so you get work you can finish on time.</div>' +
+      '<div class="grid2"><div><label>Printers you can use for us</label><input id="cPrinters" type="number" inputmode="numeric" min="0" value="' + (c.printers != null ? c.printers : ((store.pack.partner && store.pack.partner.printers) || '')) + '"></div>' +
+      '<div><label>Print hours per day</label><input id="cHours" type="number" inputmode="numeric" min="0" max="24" value="' + (c.hoursPerDay || 20) + '"></div></div>' +
+      '<label>Weekly days off</label><div class="wd">' + WD.map(function(n, i){ return '<label class="wdc"><input type="checkbox" data-wd="' + i + '"' + (off.indexOf(i) !== -1 ? ' checked' : '') + '>' + n + '</label>'; }).join('') + '</div>' +
+      '<label>Other days off (holidays, maintenance)</label><div class="inrow"><input id="cOff" type="date" min="' + today() + '"><button class="btn" data-a="cap-addoff">Add</button></div>' +
+      '<div id="cOffList" class="hint">' + ((c.daysOff || []).filter(function(d){ return d >= today(); }).map(function(d){ return '<span class="chip">' + fmtDate(d) + ' <button class="link dim" data-a="cap-deloff" data-d="' + d + '">✕</button></span>'; }).join(' ') || 'None') + '</div>' +
+      '<button class="btn primary block" data-a="cap-save" style="margin-top:16px;">Save</button>';
+  }
+  function scoreCard(full){
+    var s = store.pack.scorecard; if(!s) return '';
+    var t = s.tier || {}, nx = s.next;
+    var line = function(label, v, good){ return '<div class="row"><span>' + label + '</span><span class="r"' + (v == null ? '' : ' style="color:' + (good ? 'var(--green)' : 'var(--amber)') + ';"') + '>' + (v == null ? '—' : v + '%') + '</span></div>'; };
+    return '<div class="card"><div class="row"><span><b>Your scorecard</b><div class="hint" style="margin:0;">Last 90 days · ' + (s.jobs || 0) + ' delivered job' + (s.jobs === 1 ? '' : 's') + '</div></span><span class="pill ' + ((t.bonus || 0) > 0 ? 'done' : 'gray') + '">' + esc(t.name || 'Standard') + (t.bonus ? ' · +₹' + t.bonus + '/g' : '') + '</span></div>' +
+      (full ? line('On time', s.onTime, s.onTime == null || s.onTime >= (nx ? nx.minOnTime : 0)) + line('Rejected by clients', s.reject, s.reject == null || s.reject <= (nx ? nx.maxReject : 100)) + line('Print success', s.success, true) : '') +
+      (s.bonusMonth ? '<div class="row"><span>Bonus earned this month</span><span class="r" style="color:var(--green);">' + money(s.bonusMonth) + '</span></div>' : '') +
+      (s.need ? '<div class="hint">' + esc(s.need) + '.</div>' : nx ? '<div class="hint">Reach <b>' + esc(nx.name) + '</b> (+₹' + nx.bonus + '/g): ' + nx.minOnTime + '%+ on time and ' + nx.maxReject + '% or fewer rejects.</div>' : '<div class="hint">You’re on the top tier. 🎉</div>') + '</div>';
+  }
+
   function friendlyErr(err){
     var m = String((err && err.message) || err || '');
     if(/does not exist|schema cache/i.test(m)) return 'Thread Tribe hasn’t switched this on yet.';
@@ -460,8 +565,17 @@
     var open = all.filter(isOpen);
     var html = '<div class="hello">' + greeting() + ' · ' + new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long' }) + '</div>' +
       '<div class="stats"><div class="stat" data-a="tab" data-tab="money"><div class="k">To be paid</div><div class="v" style="color:var(--green);">' + money(p.outstanding) + '</div></div>' +
-      '<div class="stat" data-a="tab" data-tab="jobs"><div class="k">Open jobs</div><div class="v">' + open.length + '</div></div></div>';
+      '<div class="stat" data-a="tab" data-tab="jobs"><div class="k">Open jobs</div><div class="v">' + open.length + '</div></div></div>' + scoreCard(false);
     var items = [];
+    // log today's printing; set capacity
+    if(!plan.missing){
+      all.filter(function(j){ return j.status === 'printing' && !plan.progress[j.id + '|' + today()]; }).forEach(function(j){
+        var f = forecastOf(j);
+        items.push({ w: 2.5, h: act('', '📈', 'Log today’s printing: ' + esc(j.productName), esc(j.jobCode) + ' · ' + printedOf(j.id) + ' of ' + (j.qty || 0) + ' so far' + (f.date && j.dueDate && f.date > j.dueDate ? ' · <b style="color:var(--red)">running late</b>' : ''),
+          '<button class="btn primary small" data-a="prog" data-id="' + esc(j.id) + '">Log</button>') });
+      });
+      if(!plan.capacity) items.push({ w: 5.5, h: act('', '🗓️', 'Set your capacity', 'Printers, hours and days off — so jobs fit your workshop.', '<button class="btn small" data-a="cap-edit">Set now</button>') });
+    }
     // 1. new jobs to accept
     all.filter(function(j){ return j.status === 'assigned'; }).forEach(function(j){
       if(openReq('decline', function(q){ return q.payload.jobId === j.id; }).length) return;
@@ -574,6 +688,7 @@
       (pend.length ? '<div class="note warn" style="text-align:left;">You asked for ' + money(pendAmt) + ' — waiting for Thread Tribe.</div>' : '') +
       '<button class="btn primary block" data-a="req-pay" style="margin-top:16px;"' + (p.outstanding > 0.5 ? '' : ' disabled') + '>Request payout</button>' +
       (p.outstanding > 0.5 ? '' : '<div class="hint">You can request a payout once Thread Tribe confirms a delivered job.</div>') + '</div>';
+    if(store.pack.scorecard) html += '<div class="h2">Rewards</div>' + scoreCard(true);
     var pays = p.payments || [];
     html += '<div class="h2">Payments</div>';
     if(!pays.length) html += '<div class="card empty"><b>No payments yet</b>Payments from Thread Tribe will appear here.</div>';
@@ -604,6 +719,14 @@
     var html = '<div class="card"><div class="row"><span>Workshop</span><span class="r">' + esc(store.pack.partner.name || '') + '</span></div>' +
       '<div class="row"><span>Signed in as</span><span class="r" style="font-weight:500;">' + esc(store.email || '') + '</span></div>' +
       '<div class="row"><span>Rate</span><span class="r">₹' + (store.pack.partner.ratePerGram || 0) + '/g</span></div></div>';
+    if(!plan.missing){
+      var c = plan.capacity;
+      html += '<div class="h2">Your capacity</div><div class="card">' + (c ? '<div class="row"><span>Printers for Thread Tribe</span><span class="r">' + (c.printers || 0) + '</span></div>' +
+        '<div class="row"><span>Print hours a day</span><span class="r">' + (c.hoursPerDay || 0) + '</span></div>' +
+        '<div class="row"><span>Days off</span><span class="r" style="font-weight:500;">' + ((c.weeklyOff || []).map(function(i){ return WD[i]; }).join(', ') || 'none') + ((c.daysOff || []).filter(function(d){ return d >= today(); }).length ? ' + ' + (c.daysOff || []).filter(function(d){ return d >= today(); }).length + ' dates' : '') + '</span></div>'
+        : '<div class="muted">Not set yet. Thread Tribe plans jobs around your printers and days off.</div>') +
+        '<div class="btns"><button class="btn small' + (c ? '' : ' primary') + '" data-a="cap-edit">' + (c ? 'Change' : 'Set capacity') + '</button></div></div>';
+    }
     html += '<div class="h2">How you get paid</div><div class="card">' +
       (pr.upi || pr.account_no ? (pr.upi ? '<div class="row"><span>UPI</span><span class="r">' + esc(pr.upi) + '</span></div>' : '') +
         (pr.account_no ? '<div class="row"><span>Bank</span><span class="r">' + esc(pr.account_no) + '<div class="hint" style="margin:0; font-weight:500;">' + esc([pr.ifsc, pr.bank_name].filter(Boolean).join(' · ')) + '</div></span></div>' : '')
@@ -640,7 +763,11 @@
     if(decl) html += '<div class="note warn"><b>You asked to hand this job back.</b> Waiting for Thread Tribe. <button class="link" data-a="withdraw" data-id="' + esc(decl.id) + '">Withdraw</button></div>';
     else if(declNo && declNo.reply && isOpen(j)) html += '<div class="note info"><b>Thread Tribe:</b> ' + esc(declNo.reply) + '</div>';
 
-    if(sheetState && sheetState.mode === 'ship'){
+    if(sheetState && sheetState.mode === 'prog'){
+      html += progressForm(j);
+    } else if(sheetState && sheetState.mode === 'pk'){
+      html += pickupForm(j);
+    } else if(sheetState && sheetState.mode === 'ship'){
       html += shipForm(j);
     } else if(sheetState && sheetState.mode === 'decline'){
       html += '<label>Why can’t you do this job?</label><textarea id="fReason" placeholder="e.g. printer down, can’t make the date"></textarea>' +
@@ -660,6 +787,7 @@
       if(canUndo) small.push('<button class="link dim" data-a="undo" data-id="' + esc(j.id) + '">Undo last step</button>');
       if(!decl && ['assigned', 'accepted', 'printing'].indexOf(j.status) !== -1 && !cloud.missing) small.push('<button class="link dim" data-a="decline" data-id="' + esc(j.id) + '">Can’t do this job?</button>');
       if(small.length) html += '<div style="display:flex; justify-content:space-between; margin-top:6px;">' + small.join('') + '</div>';
+      html += progressCard(j) + pickupCard(j);
       if(st.name || st.address || st.phone){
         html += '<div class="h2" style="margin-left:0;">Ship to</div><div class="card" style="margin:0;"><b>' + esc(st.name || '') + '</b><div class="muted" style="color:var(--text); margin-top:2px;">' + esc(st.address || '').replace(/\n/g, '<br>') + '</div>' +
           '<div class="btns"><button class="btn small" data-a="copy-addr" data-id="' + esc(j.id) + '">Copy address</button>' + (st.phone ? '<a class="btn small" style="text-decoration:none;" href="tel:' + esc(st.phone.replace(/[^0-9+]/g, '')) + '">Call ' + esc(st.phone) + '</a>' : '') + '</div></div>';
@@ -715,6 +843,7 @@
         '<div class="hint">Only Thread Tribe can see these.</div>' +
         '<button class="btn primary block" data-a="profile-save" style="margin-top:16px;">Save</button>';
     }
+    if(kind === 'capacity') return capacityForm();
     if(kind === 'message') return '<div class="sheet-h"><div class="t">Message Thread Tribe</div><button class="x" data-a="close">✕</button></div>' +
       '<textarea id="fMsg" placeholder="Type your message"></textarea><button class="btn primary block" data-a="message-send" style="margin-top:12px;">Send</button>';
     return '';
@@ -959,6 +1088,36 @@
     if(a === 'req-fil'){ openSheet({ kind: 'req-fil', opt: { color: b.getAttribute('data-color') || '', g: num(b.getAttribute('data-g')) }, force: true }); return; }
     if(a === 'ack-problem'){ openSheet({ kind: 'ack-problem', opt: { id: id, amt: num(b.getAttribute('data-amt')) }, force: true }); return; }
     if(a === 'profile'){ openSheet({ kind: 'profile', force: true }); return; }
+    if(a === 'prog'){ openSheet({ kind: 'job', id: id, mode: 'prog', force: true }); setTimeout(function(){ var t = document.getElementById('gPrinted'); if(t) t.focus(); }, 280); return; }
+    if(a === 'pk'){ openSheet({ kind: 'job', id: id, mode: 'pk', force: true }); return; }
+    if(a === 'cap-edit'){ capDraft = null; openSheet({ kind: 'capacity', force: true }); return; }
+    if(a === 'cap-addoff'){ var od = (document.getElementById('cOff') || {}).value; if(!od) return; var c0 = Object.assign({}, plan.capacity || {}); c0.daysOff = (c0.daysOff || []).filter(function(x){ return x !== od && x >= today(); }).concat([od]).sort(); plan.capacity = Object.assign(plan.capacity || {}, { daysOff: c0.daysOff }); capKeep(); openSheet({ kind: 'capacity', force: true }); return; }
+    if(a === 'cap-deloff'){ var dd = b.getAttribute('data-d'); if(plan.capacity) plan.capacity.daysOff = (plan.capacity.daysOff || []).filter(function(x){ return x !== dd; }); capKeep(); openSheet({ kind: 'capacity', force: true }); return; }
+    if(a === 'cap-save'){
+      var cap = { printers: Math.max(0, Math.round(num(document.getElementById('cPrinters').value))), hoursPerDay: Math.min(24, Math.max(0, num(document.getElementById('cHours').value))),
+        weeklyOff: Array.prototype.map.call(document.querySelectorAll('[data-wd]:checked'), function(x){ return +x.getAttribute('data-wd'); }),
+        daysOff: ((plan.capacity && plan.capacity.daysOff) || []).filter(function(x){ return x >= today(); }), updatedAt: new Date().toISOString() };
+      if(await savePlan('capacity', 'main', cap)){ closeSheet(); toast('Capacity saved'); renderAll(); }
+      return;
+    }
+    if(a === 'prog-save'){
+      var pj = findJob(id); if(!pj) return;
+      var pr2 = Math.max(0, Math.round(num(document.getElementById('gPrinted').value))), fl = Math.max(0, Math.round(num(document.getElementById('gFailed').value)));
+      if(await savePlan('progress', id + '|' + today(), { jobId: id, date: today(), printed: pr2, failed: fl, at: new Date().toISOString() })){
+        if(pj.j.status === 'accepted' && pr2 > 0) advance(id);
+        openSheet({ kind: 'job', id: id, force: true }); toast('Saved — ' + printedOf(id) + ' of ' + (pj.j.qty || 0) + ' printed'); renderAll();
+      }
+      return;
+    }
+    if(a === 'pk-save'){
+      var bk = { mode: document.getElementById('kMode').value, date: document.getElementById('kDate').value, slot: document.getElementById('kSlot').value,
+        boxes: Math.max(1, Math.round(num(document.getElementById('kBoxes').value) || 1)), weightKg: num(document.getElementById('kKg').value), notes: (document.getElementById('kNote').value || '').trim().slice(0, 200), bookedAt: new Date().toISOString() };
+      if(!bk.date){ toast('Pick a date'); return; }
+      var prev = plan.pickup[id];
+      if(prev && prev.date === bk.date && prev.mode === bk.mode){ bk.courier = prev.courier; bk.awb = prev.awb; bk.confirmedAt = prev.confirmedAt; }
+      if(await savePlan('pickup', id, bk)){ openSheet({ kind: 'job', id: id, force: true }); toast('Booked — Thread Tribe will confirm'); renderAll(); }
+      return;
+    }
     if(a === 'message'){ openSheet({ kind: 'message', force: true }); setTimeout(function(){ var t = document.getElementById('fMsg'); if(t) t.focus(); }, 280); return; }
     if(a === 'statement'){
       var txt = statementText();

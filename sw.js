@@ -1,11 +1,11 @@
 // Offline support for the Thread Tribe Partner Portal.
 // Bump VERSION whenever index.html changes so phones pick up the new build.
-const VERSION = 'tt-partner-202610072002';
+const VERSION = 'tt-partner-202610101400';
 const SHELL = ['./', './index.html', './manifest.webmanifest', './icons/icon-192.png', './icons/icon-512.png', './icons/apple-touch-icon.png', './config.js', './vendor/supabase.js'];
 const THIRD_PARTY = ['fonts.googleapis.com', 'fonts.gstatic.com', 'cdnjs.cloudflare.com'];
 
 self.addEventListener('install', function(e){
-  e.waitUntil(caches.open(VERSION).then(function(c){ return c.addAll(SHELL); }).then(function(){ return self.skipWaiting(); }));
+  e.waitUntil(caches.open(VERSION).then(function(c){ return c.addAll(SHELL.map(function(u){ return new Request(u, { cache: 'reload' }); })); }).then(function(){ return self.skipWaiting(); }));
 });
 
 self.addEventListener('activate', function(e){
@@ -30,13 +30,13 @@ self.addEventListener('fetch', function(e){
 
   // Settings file: always try the network so edits to config.js arrive straight away.
   if(url.origin === location.origin && /\/config\.js$/.test(url.pathname)){
-    e.respondWith(fetch(req).then(function(res){ return putInCache(req, res); }).catch(function(){ return caches.match(req); }));
+    e.respondWith(fetch(req.url, { cache: 'no-cache' }).then(function(res){ return putInCache(req, res); }).catch(function(){ return caches.match(req); }));
     return;
   }
 
   // The app page itself: try the network first so updates arrive, fall back to the cached copy offline.
   if(req.mode === 'navigate' && url.origin === location.origin){
-    e.respondWith(fetch(req).then(function(res){
+    e.respondWith(fetch(req.url, { cache: 'no-cache', credentials: 'same-origin' }).then(function(res){
       if(res.ok){ const copy = res.clone(); caches.open(VERSION).then(function(c){ c.put('./index.html', copy); }); }
       return res;
     }).catch(function(){ return caches.match('./index.html'); }));
