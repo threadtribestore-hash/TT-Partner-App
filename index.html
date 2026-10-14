@@ -557,10 +557,16 @@
     if(d <= 3) return '<span class="chip soon">Due in ' + d + ' days</span>';
     return '<span class="chip">Due ' + fmtDate(j.dueDate) + '</span>';
   }
+  // Urgent jobs, or jobs at a rate above the partner's usual one, say so with the job's rate.
+  function rateChip(j){
+    var usual = (store.pack && store.pack.partner && store.pack.partner.ratePerGram) || 0, r = j.ratePerGram || 0, higher = r > usual + 0.001;
+    if(!j.urgent && !higher) return '';
+    return ' <span class="chip soon">' + (j.urgent ? '⚡ Urgent' : 'Higher rate') + (higher ? ' · ₹' + r + '/g' : '') + '</span>';
+  }
   function jobRow(j){
     return '<button class="job" data-a="job" data-id="' + esc(j.id) + '"><span class="sw" style="background:' + swatch(j.color) + '; width:18px; height:18px;"></span>' +
       '<span class="body"><span class="t">' + esc(j.productName || 'Job') + ' × ' + (j.qty || 0) + '</span>' +
-      '<span class="s" style="display:block;">' + esc(j.jobCode || '') + (j.color ? ' · ' + esc(j.color) : '') + ' · ' + dueChip(j) + (j.status === 'assigned' ? ' <span class="chip new">New</span>' : '') +
+      '<span class="s" style="display:block;">' + esc(j.jobCode || '') + (j.color ? ' · ' + esc(j.color) : '') + ' · ' + dueChip(j) + (j.status === 'assigned' ? ' <span class="chip new">New</span>' : '') + rateChip(j) +
       (j._dirty ? ' <span class="chip soon">Saving…</span>' : '') + '</span></span><span class="chev">›</span></button>';
   }
   function act(cls, icon, title, sub, btns){
@@ -587,7 +593,7 @@
     // 1. new jobs to accept
     all.filter(function(j){ return j.status === 'assigned'; }).forEach(function(j){
       if(openReq('decline', function(q){ return q.payload.jobId === j.id; }).length) return;
-      items.push({ w: 1, h: act('', '🆕', 'New job: ' + esc(j.productName) + ' × ' + (j.qty || 0), esc(j.jobCode) + ' · ' + esc(j.color || '') + ' · ' + dueChip(j) + ' · earns ~' + money(j.payout),
+      items.push({ w: 1, h: act('', '🆕', 'New job: ' + esc(j.productName) + ' × ' + (j.qty || 0), esc(j.jobCode) + ' · ' + esc(j.color || '') + ' · ' + dueChip(j) + rateChip(j) + ' · earns ~' + money(j.payout),
         '<button class="btn primary small" data-a="advance" data-id="' + esc(j.id) + '">Accept</button><button class="btn small" data-a="job" data-id="' + esc(j.id) + '">View</button>') });
     });
     // 2. late or due soon
@@ -769,7 +775,7 @@
     var declNo = reqs('decline', function(q){ return q.payload.jobId === j.id && q.status === 'rejected'; })[0];
     var st = j.shipTo || {};
     var html = '<div class="sheet-h"><div><div class="t">' + esc(j.productName) + ' × ' + (j.qty || 0) + '</div><div class="muted">' + esc(j.jobCode) + ' · ' + esc([j.color, j.material].filter(Boolean).join(' · ')) + ' · ' + (j.gramsPerUnit || 0) + ' g each</div></div><button class="x" data-a="close">✕</button></div>' +
-      '<div style="margin-top:6px;">' + dueChip(j) + ' <span class="chip">Earns ~' + money(j.payout) + '</span></div>' + stepper(j.status);
+      '<div style="margin-top:6px;">' + dueChip(j) + ' <span class="chip">Earns ~' + money(j.payout) + '</span>' + rateChip(j) + '</div>' + stepper(j.status);
     if(j.qcNotes) html += '<div class="note ' + (j.qcResult === 'issues' ? 'bad' : 'info') + '"><b>Thread Tribe:</b> ' + esc(j.qcNotes) + '</div>';
     if(decl) html += '<div class="note warn"><b>You asked to hand this job back.</b> Waiting for Thread Tribe. <button class="link" data-a="withdraw" data-id="' + esc(decl.id) + '">Withdraw</button></div>';
     else if(declNo && declNo.reply && isOpen(j)) html += '<div class="note info"><b>Thread Tribe:</b> ' + esc(declNo.reply) + '</div>';
