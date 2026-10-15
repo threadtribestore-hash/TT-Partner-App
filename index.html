@@ -805,7 +805,7 @@
       else if(BACK[j.status] && !decl) small.push('<button class="link dim" data-a="back" data-id="' + esc(j.id) + '">← Back to ' + STEP_LABEL[BACK[j.status]] + '</button>');
       if(!decl && ['assigned', 'accepted', 'printing'].indexOf(j.status) !== -1 && !cloud.missing) small.push('<button class="link dim" data-a="decline" data-id="' + esc(j.id) + '">Can’t do this job?</button>');
       if(small.length) html += '<div style="display:flex; justify-content:space-between; margin-top:6px;">' + small.join('') + '</div>';
-      html += progressCard(j) + pickupCard(j);
+      html += filesCard(j) + progressCard(j) + pickupCard(j);
       if(st.name || st.address || st.phone){
         html += '<div class="h2" style="margin-left:0;">Ship to</div><div class="card" style="margin:0;"><b>' + esc(st.name || '') + '</b><div class="muted" style="color:var(--text); margin-top:2px;">' + esc(st.address || '').replace(/\n/g, '<br>') + '</div>' +
           '<div class="btns"><button class="btn small" data-a="copy-addr" data-id="' + esc(j.id) + '">Copy address</button>' + (st.phone ? '<a class="btn small" style="text-decoration:none;" href="tel:' + esc(st.phone.replace(/[^0-9+]/g, '')) + '">Call ' + esc(st.phone) + '</a>' : '') + '</div></div>';
@@ -813,6 +813,24 @@
       if(isOpen(j)) html += '<details' + (j.partnerNotes ? ' open' : '') + '><summary>Note for Thread Tribe</summary><textarea id="fNotes" data-id="' + esc(j.id) + '" placeholder="Anything they should know about this job">' + esc(j.partnerNotes || '') + '</textarea><div class="btns"><button class="btn small" data-a="save-note" data-id="' + esc(j.id) + '">Save note</button></div></details>';
     }
     return html;
+  }
+  // Sliced files Thread Tribe attached to this job; downloaded through a short-lived private link.
+  function filesCard(j){
+    var fs = j.files || [];
+    if(!fs.length) return '';
+    return '<div class="h2" style="margin-left:0;">Print files</div><div class="card" style="margin:0;">' + fs.map(function(f, i){
+      var mb = (+f.size || 0) >= 1048576 ? (Math.round((+f.size) / 104857.6) / 10) + ' MB' : Math.max(1, Math.round((+f.size || 0) / 1024)) + ' KB';
+      return '<div class="row"><div style="min-width:0"><div style="font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(f.name) + '</div><div class="muted">' + mb + '</div></div>' +
+        '<button class="btn small" data-a="dl-file" data-id="' + esc(j.id) + '" data-i="' + i + '">Download</button></div>';
+    }).join('') + '<div class="muted" style="margin-top:6px;">Print these exactly as sliced. Ask Thread Tribe before changing settings.</div></div>';
+  }
+  async function downloadFile(id, i){
+    var f = findJob(id), file = f && (f.j.files || [])[i];
+    if(!file || !sb || !session){ toast('Sign in again to download'); return; }
+    var w = window.open('', '_blank');
+    var r = await sb.storage.from('print-files').createSignedUrl(file.path, 600, { download: file.name });
+    if(r.error){ if(w) w.close(); toast(/not found/i.test(r.error.message || '') ? 'That file is no longer available' : 'Couldn’t get the file — try again'); return; }
+    if(w) w.location = r.data.signedUrl; else location.href = r.data.signedUrl;
   }
   function shipForm(j){
     var can = 'BarcodeDetector' in window && navigator.mediaDevices;
@@ -1299,6 +1317,7 @@
     if(a === 'scan-awb'){ startScan(); return; }
     if(a === 'scan-stop'){ stopScan(); return; }
     if(a === 'save-note'){ var n = document.getElementById('fNotes'); setEdit(id, 'partnerNotes', String(n.value || '').slice(0, 2000)); scheduleSave(); toast('Note saved'); n.blur(); return; }
+    if(a === 'dl-file'){ downloadFile(id, +b.getAttribute('data-i')); return; }
     if(a === 'copy-addr'){ var f2 = findJob(id); var st = (f2 && f2.j.shipTo) || {}; copy([st.name, st.address, st.phone].filter(Boolean).join('\n'), 'Address copied'); return; }
     if(a === 'req-pay'){ openSheet({ kind: 'req-pay', force: true }); return; }
     if(a === 'req-fil'){ openSheet({ kind: 'req-fil', opt: { color: b.getAttribute('data-color') || '', g: num(b.getAttribute('data-g')) }, force: true }); return; }
