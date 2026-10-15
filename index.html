@@ -173,6 +173,14 @@
     opacity:0; transition:all .2s; z-index:200; max-width:calc(100% - 32px); text-align:center; pointer-events:none; }
   .toast.show{ opacity:1; transform:translateX(-50%); }
   .ptr{ text-align:center; font-size:12.5px; color:var(--dim); height:0; overflow:hidden; transition:height .15s; }
+
+  /* Thread Tribe logo: the logomark beside the page title, the full lockup above sign-in.
+     Drawn as a mask so it takes the theme's text colour in light and dark mode. */
+  .top-left{ position:relative; padding-left:50px; }
+  .top-left::before{ content:""; position:absolute; left:0; top:50%; width:40px; height:24px; transform:translateY(-50%);
+    background:var(--text); -webkit-mask:url(brand/tt-logomark.svg) center/contain no-repeat; mask:url(brand/tt-logomark.svg) center/contain no-repeat; }
+  #signin:not(.hidden)::before{ content:""; display:block; width:170px; height:98px; margin:28px auto -8px;
+    background:var(--text); -webkit-mask:url(brand/tt-lockup.svg) center/contain no-repeat; mask:url(brand/tt-lockup.svg) center/contain no-repeat; }
 </style>
 </head>
 <body>
