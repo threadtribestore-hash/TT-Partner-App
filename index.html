@@ -96,6 +96,17 @@
   .seg button{ flex:none; border:1px solid var(--line); background:var(--panel); border-radius:20px; padding:8px 14px; font-size:13.5px; font-weight:600; color:var(--dim); cursor:pointer; }
   .seg button.on{ background:var(--text); color:var(--bg); border-color:var(--text); }
   .seg button .n{ margin-left:6px; font-size:12px; opacity:0.75; }
+  .ins-grid{ display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:10px; }
+  .ins-card{ background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:8px; display:flex; flex-direction:column; gap:5px; min-width:0; }
+  .ins-card img{ width:100%; aspect-ratio:4/3; object-fit:cover; border-radius:10px; background:var(--panel2); display:block; }
+  .ins-t{ font-size:13px; font-weight:600; line-height:1.3; overflow:hidden; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; }
+  .ins-lic{ align-self:flex-start; font-size:11px; font-weight:700; padding:2px 8px; border-radius:10px; }
+  .ins-lic.ok{ background:var(--green-soft); color:var(--green); } .ins-lic.no{ background:var(--red-soft); color:var(--red); } .ins-lic.warn{ background:var(--amber-soft); color:var(--amber); }
+  .ins-thumbs{ display:grid; grid-template-columns:repeat(3, 1fr); gap:6px; margin-top:8px; }
+  .ins-thumbs img{ width:100%; aspect-ratio:1; object-fit:cover; border-radius:8px; background:var(--panel2); display:block; }
+  .brief{ margin-top:12px; }
+  .brief-g{ margin-top:12px; } .brief-h{ font-size:12px; font-weight:700; color:var(--dim); text-transform:uppercase; letter-spacing:.04em; margin-bottom:4px; }
+  .brief-r{ display:flex; gap:10px; padding:5px 0; border-bottom:1px solid var(--line); font-size:14px; } .brief-r span{ color:var(--dim); min-width:110px; } .brief-r b{ font-weight:600; flex:1; overflow-wrap:anywhere; }
   .job{ display:flex; gap:12px; align-items:center; background:var(--panel); border:1px solid var(--line); border-radius:16px; padding:14px; margin-bottom:10px; cursor:pointer; width:100%; text-align:left; box-shadow:var(--shadow); }
   .job .body{ flex:1; min-width:0; }
   .job .t{ font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
@@ -901,7 +912,31 @@
   var PJ_OLD = { pitch: 'brief', concept: 'design', cad: 'design', production: 'approval' };
   // The designer can move a project forward up to Approval; Live is Thread Tribe's call.
   var PJ_MINE = ['design', 'prototype', 'approval'];
-  var pj = { list: [], items: {}, missing: false, sel: null, chan: null };
+  var pj = { list: [], items: {}, missing: false, sel: null, chan: null, view: 'projects' };
+  // Design research, shared with designers (research_designer_setup.sql): rising themes,
+  // trending Printables designs, and the ideas Thread Tribe shares.
+  var ins = { loaded: false, missing: false, themes: [], items: [], ideas: [], tab: 'themes', kw: '' };
+  async function loadInspo(){
+    if(!sb || !session) return;
+    var res = await Promise.all([
+      sb.from('research_themes').select('term,now_count,prev_count,examples').order('score', { ascending: false }).limit(40),
+      sb.from('research_items').select('source,ext_id,store,title,url,image,tags,keyword,likes,makes,downloads,license,published_at,score').eq('source', 'printables').order('score', { ascending: false }).limit(150),
+      sb.from('research_ideas').select('id,title,notes,status,refs,updated_at').eq('shared', true).order('updated_at', { ascending: false }).limit(50)
+    ]);
+    var err = res.map(function(r){ return r.error; }).filter(Boolean)[0];
+    ins.loaded = true;
+    if(err){ ins.missing = true; return; }
+    ins.missing = false; ins.themes = res[0].data || []; ins.items = res[1].data || []; ins.ideas = res[2].data || [];
+  }
+  function insLicence(l){
+    var t = String(l || '').toLowerCase();
+    if(!t) return ['', ''];
+    if(/public domain|cc0/.test(t)) return ['ok', 'Free to use'];
+    if(/noncommercial|non-commercial/.test(t)) return ['no', 'Not for sale'];
+    if(/standard digital|all rights/.test(t)) return ['no', 'Personal use only'];
+    if(/noderiv/.test(t)) return ['warn', 'No changes'];
+    return ['ok', 'Can sell, credit maker'];
+  }
   // Designer access is a setting Thread Tribe switches on per partner in Studio (Projects → Designers).
   function isDesigner(){ return !!(store.pack && store.pack.designer); }
   function inDesigner(){ return store.view === 'designer' && isDesigner(); }
@@ -966,6 +1001,49 @@
   function projectsHtml(){
     if(pj.missing) return '<div class="card empty"><b>Projects aren’t switched on yet</b>Thread Tribe needs to finish setting them up.</div>';
     if(pj.sel && pjGet(pj.sel)) return projectHtml(pjGet(pj.sel));
+    var sw = '<div class="seg" style="margin-bottom:12px;"><button class="' + (pj.view !== 'inspo' ? 'on' : '') + '" data-a="pj-view" data-v="projects">Projects</button><button class="' + (pj.view === 'inspo' ? 'on' : '') + '" data-a="pj-view" data-v="inspo">💡 Inspiration</button></div>';
+    if(pj.view === 'inspo') return sw + inspoHtml();
+    return sw + projectsListHtml();
+  }
+  function insCard(it, extra){
+    var lic = insLicence(it.license);
+    return '<div class="ins-card">' + (it.image ? '<a href="' + esc(it.url || '#') + '" target="_blank" rel="noopener"><img loading="lazy" src="' + esc(it.image) + '" alt=""></a>' : '') +
+      '<div class="ins-t">' + esc(it.title || '') + '</div>' + (extra || '') +
+      (lic[1] ? '<span class="ins-lic ' + lic[0] + '">' + lic[1] + '</span>' : '') +
+      '<button class="btn small" data-a="pj-ins-add" data-src="' + esc(it.source || '') + '" data-id="' + esc(it.ext_id || '') + '">+ Add to project</button></div>';
+  }
+  function inspoHtml(){
+    if(!ins.loaded){ loadInspo().then(renderAll); return '<div class="card empty"><b>Loading inspiration…</b></div>'; }
+    if(ins.missing) return '<div class="card empty"><b>Not switched on yet</b>Thread Tribe needs to finish setting up design research for designers.</div>';
+    var tabs = [['themes', 'Rising themes'], ['trending', 'Trending'], ['ideas', 'From Thread Tribe' + (ins.ideas.length ? ' · ' + ins.ideas.length : '')]];
+    var html = '<div class="seg" style="margin-bottom:10px;">' + tabs.map(function(t){ return '<button class="' + (ins.tab === t[0] ? 'on' : '') + '" data-a="pj-ins-tab" data-t="' + t[0] + '">' + t[1] + '</button>'; }).join('') + '</div>';
+    if(ins.tab === 'themes'){
+      html += '<div class="hint" style="margin:0 4px 10px;">Styles turning up more in the newest 3D-print designs. Tap a picture to see the design.</div>';
+      html += ins.themes.length ? ins.themes.map(function(t){
+        return '<div class="card"><div class="row" style="padding-top:0;border:0;"><b style="text-transform:capitalize;">' + esc(t.term) + '</b><span class="hint" style="margin:0;">' + t.now_count + ' newer · ' + t.prev_count + ' older</span></div>' +
+          '<div class="ins-thumbs">' + (t.examples || []).slice(0, 6).map(function(e){ return '<a href="' + esc(e.url || '#') + '" target="_blank" rel="noopener"><img loading="lazy" src="' + esc(e.image) + '" alt="' + esc(e.title) + '"></a>'; }).join('') + '</div></div>';
+      }).join('') : '<div class="card empty"><b>No themes yet</b>They appear after the first research runs.</div>';
+    } else if(ins.tab === 'trending'){
+      var kws = []; ins.items.forEach(function(i){ if(i.keyword && kws.indexOf(i.keyword) === -1) kws.push(i.keyword); });
+      var list = ins.items.filter(function(i){ return !ins.kw || i.keyword === ins.kw; });
+      html += '<div class="seg" style="margin-bottom:10px;"><button class="' + (!ins.kw ? 'on' : '') + '" data-a="pj-ins-kw" data-k="">All</button>' + kws.map(function(k){ return '<button class="' + (ins.kw === k ? 'on' : '') + '" data-a="pj-ins-kw" data-k="' + esc(k) + '">' + esc(k) + '</button>'; }).join('') + '</div>' +
+        '<div class="hint" style="margin:0 4px 10px;">Ranked by how fast each is gaining likes and prints. The badge says what its licence allows: get inspired, don’t copy.</div>';
+      html += list.length ? '<div class="ins-grid">' + list.slice(0, 40).map(function(i){ return insCard(i, '<div class="hint" style="margin:0;">♥ ' + (i.likes || 0) + ' · made ' + (i.makes || 0) + '</div>'); }).join('') + '</div>' : '<div class="card empty"><b>Nothing here yet</b></div>';
+    } else {
+      html += ins.ideas.length ? ins.ideas.map(function(i){
+        return '<div class="card"><b>' + esc(i.title) + '</b>' + (i.notes ? '<div class="hint" style="white-space:pre-wrap;">' + esc(i.notes) + '</div>' : '') +
+          ((i.refs || []).filter(function(r){ return r.image; }).length ? '<div class="ins-grid" style="margin-top:10px;">' + i.refs.filter(function(r){ return r.image; }).slice(0, 6).map(function(r){ return insCard(r); }).join('') + '</div>' : '') + '</div>';
+      }).join('') : '<div class="card empty"><b>Nothing shared yet</b>Ideas Thread Tribe shares with designers show here.</div>';
+    }
+    return html;
+  }
+  function insFind(src, id){
+    var it = ins.items.find(function(i){ return i.source === src && i.ext_id === id; });
+    if(!it) ins.ideas.forEach(function(i){ (i.refs || []).forEach(function(r){ if(r.source === src && r.ext_id === id) it = r; }); });
+    if(!it) ins.themes.forEach(function(t){ (t.examples || []).forEach(function(r){ if(r.source === src && r.ext_id === id) it = r; }); });
+    return it;
+  }
+  function projectsListHtml(){
     var open = pj.list.filter(function(p){ return ['live', 'cancelled'].indexOf(pjSt(p)) === -1; }), done = pj.list.filter(function(p){ return open.indexOf(p) === -1; });
     var html = '', todo = pjTodo();
     if(todo.length) html += '<div class="h2">To do<span class="count">' + todo.length + '</span></div>' + todo.map(function(x){
@@ -976,6 +1054,29 @@
     if(done.length) html += '<div class="h2">Live &amp; closed<span class="count">' + done.length + '</span></div>' + done.map(pjCard).join('');
     return html;
   }
+  // The structured brief Thread Tribe fills in (Studio → Projects), read-only here.
+  var BRIEF = [['What it is', [['type', 'Type'], ['purpose', 'For'], ['audience', 'Who it’s for']]],
+    ['Size & build', [['dims', 'Size (mm)'], ['material', 'Material'], ['colours', 'Colours'], ['finish', 'Finish'], ['parts', 'Parts'], ['moving', 'Moving parts'], ['hardware', 'Inserts & hardware']]],
+    ['Branding', [['branding', 'Logo / text']]],
+    ['Constraints', [['printer', 'Prints on'], ['supports', 'Supports'], ['printTime', 'Print time / piece'], ['safety', 'Safety']]]];
+  var BRIEF_DEL = { files: 'Print-ready 3MF / STL with settings', renders: 'Renders or photos', cad: 'Source CAD (STEP / F3D)', proto: 'Printed prototype', notes: 'Assembly & print notes' };
+  function briefView(d){
+    var sp = d.spec || {}, html = '';
+    BRIEF.forEach(function(g){
+      var rows = g[1].filter(function(f){ return String(sp[f[0]] == null ? '' : sp[f[0]]).trim() && sp[f[0]] !== 'None'; });
+      if(!rows.length) return;
+      html += '<div class="brief-g"><div class="brief-h">' + g[0] + '</div>' + rows.map(function(f){ return '<div class="brief-r"><span>' + f[1] + '</span><b>' + esc(sp[f[0]]) + (f[0] === 'printTime' ? ' h' : '') + '</b></div>'; }).join('') + '</div>';
+    });
+    if((sp.deliverables || []).length) html += '<div class="brief-g"><div class="brief-h">You deliver</div>' + sp.deliverables.map(function(k){ return '<div class="brief-r"><span>✓</span><b>' + esc(BRIEF_DEL[k] || k) + '</b></div>'; }).join('') + '</div>';
+    if(String(sp.doneWhen || '').trim()) html += '<div class="note info" style="margin:10px 0 0;"><b>Done when:</b> ' + esc(sp.doneWhen) + '</div>';
+    var insp = d.inspo || [];
+    if(insp.length) html += '<div class="brief-g"><div class="brief-h">Inspiration from Thread Tribe</div><div class="ins-grid">' + insp.map(function(x){
+      var lic = insLicence(x.license);
+      return '<div class="ins-card"><a href="' + esc(x.url || '#') + '" target="_blank" rel="noopener">' + (x.image ? '<img loading="lazy" src="' + esc(x.image) + '" alt="">' : '') + '</a><div class="ins-t">' + esc(x.title || '') + '</div>' +
+        (x.note ? '<div class="hint" style="margin:0;">“' + esc(x.note) + '”</div>' : '') + (lic[1] ? '<span class="ins-lic ' + lic[0] + '">' + lic[1] + '</span>' : '') + (x.by === 'designer' ? '<span class="hint" style="margin:0;">added by you</span>' : '') + '</div>';
+    }).join('') + '</div></div>';
+    return html ? '<div class="brief">' + html + '</div>' : '';
+  }
   function projectHtml(p){
     var d = p.data || {}, st = pjSt(p), idx = PJ_STAGES.findIndex(function(s){ return s[0] === st; });
     var html = '<button class="link" data-a="pj-back">‹ All projects</button>' +
@@ -985,7 +1086,7 @@
     var nextSt = PJ_STAGES[idx + 1];
     if(nextSt && PJ_MINE.indexOf(nextSt[0]) !== -1) html += '<div class="btns"><button class="btn primary small" data-a="pj-stage" data-st="' + nextSt[0] + '">Move to ' + nextSt[1] + '</button></div>';
     else if(st === 'approval') html += '<div class="hint">Waiting for approval. Thread Tribe marks it live.</div>';
-    html += (d.brief ? '<div style="white-space:pre-wrap;margin-top:12px;">' + esc(d.brief) + '</div>' : '') +
+    html += briefView(d) + (d.brief ? '<div style="white-space:pre-wrap;margin-top:12px;">' + esc(d.brief) + '</div>' : '') +
       ([d.qty ? d.qty + ' pcs' : '', d.targetPrice ? 'target ₹' + d.targetPrice + '/pc' : ''].filter(Boolean).length ? '<div class="hint">' + [d.qty ? d.qty + ' pcs' : '', d.targetPrice ? 'target ₹' + d.targetPrice + '/pc' : ''].filter(Boolean).join(' · ') + '</div>' : '') + '</div>';
     var imgs = pjItems(p.id, 'image').filter(function(x){ return typeof (x.data || {}).img === 'string' && /^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+\/=]+$/.test(x.data.img); }), refs = (d.refs || []).filter(function(u){ return /^https?:\/\/[^\s"'<>]+$/i.test(u); });
     if(imgs.length || refs.length) html += '<div class="h2">References</div><div class="card">' + (imgs.length ? '<div style="display:flex;gap:8px;flex-wrap:wrap;">' + imgs.map(function(x){ return '<img src="' + x.data.img + '" alt="" data-a="pj-zoom" style="width:96px;height:96px;object-fit:cover;border-radius:12px;cursor:zoom-in;">'; }).join('') + '</div>' : '') +
@@ -1012,6 +1113,14 @@
   function pjAddDays(n){ var d = new Date(); d.setDate(d.getDate() + n); return iso(d); }
   function pjPlanRow(title, due){ return '<div class="grid2 pj-prow" style="grid-template-columns:1fr 150px;align-items:center;margin-top:8px;"><input class="pj-pt" value="' + esc(title || '') + '" placeholder="Step"><input class="pj-pd" type="date" value="' + esc(due || '') + '"></div>'; }
   function pjForm(kind, opt){
+    if(kind === 'pj-ins-add'){
+      var it = insFind(opt.src, opt.id), open = pj.list.filter(function(p){ return ['live', 'cancelled'].indexOf(pjSt(p)) === -1; });
+      return '<div class="sheet-h"><div class="t">Add to a project</div><button class="x" data-a="close">✕</button></div>' +
+        (it ? '<div class="muted" style="margin-bottom:10px;">' + esc(it.title || '') + '</div>' : '') +
+        '<label>Note (optional)<input id="insNote" placeholder="e.g. the hinge idea for the door"></label>' +
+        (open.length ? open.map(function(p){ return '<button class="pick" data-a="pj-ins-pick" data-id="' + esc(p.id) + '" data-src="' + esc(opt.src) + '" data-x="' + esc(opt.id) + '"><span class="ic">✏️</span><span style="flex:1;"><b>' + esc((p.data || {}).title || 'Untitled') + '</b><div class="hint" style="margin:0;">' + pjStage(pjSt(p)) + '</div></span></button>'; }).join('')
+          : '<div class="muted">No open projects.</div>');
+    }
     if(kind === 'pj-zoom') return '<div class="sheet-h"><div class="t">Reference</div><button class="x" data-a="close">✕</button></div>' + (/^data:image\//.test(opt.src || '') ? '<img src="' + opt.src + '" alt="" style="width:100%;border-radius:12px;">' : '');
     if(kind === 'pj-plan'){
       var pp = pjGet(opt.id) || {}, dd = (pp.data || {}).due, rows = PJ_SUGGEST.map(function(x){ var d = pjAddDays(x[1]); return pjPlanRow(x[0], dd && d > dd ? dd : d); }).join('');
@@ -1058,6 +1167,23 @@
       var r = await sb.from('project_items').update({ data: data }).eq('project_id', tp.id).eq('id', t.id);
       if(r.error){ b.checked = !b.checked; toast(friendlyErr(r.error)); return; }
       t.data = data; buzz(); b.blur(); renderAll(); return;
+    }
+    if(a === 'pj-view'){ pj.view = b.getAttribute('data-v'); renderAll(); window.scrollTo(0, 0); return; }
+    if(a === 'pj-ins-tab'){ ins.tab = b.getAttribute('data-t'); renderAll(); return; }
+    if(a === 'pj-ins-kw'){ ins.kw = b.getAttribute('data-k'); renderAll(); return; }
+    if(a === 'pj-ins-add'){ openSheet({ kind: 'pj-ins-add', opt: { src: b.getAttribute('data-src'), id: b.getAttribute('data-id') }, force: true }); return; }
+    if(a === 'pj-ins-pick'){
+      var ip = pjGet(b.getAttribute('data-id')), it = insFind(b.getAttribute('data-src'), b.getAttribute('data-x'));
+      if(!ip || !it) return;
+      var list = ((ip.data || {}).inspo || []).slice();
+      if(!list.some(function(x){ return x.source === it.source && x.ext_id === it.ext_id; })){
+        list.push({ source: it.source, ext_id: it.ext_id, title: String(it.title || '').slice(0, 200), image: it.image || null, url: it.url || null, license: it.license || null, store: it.store || null,
+          note: String((document.getElementById('insNote') || {}).value || '').slice(0, 200), by: 'designer', at: new Date().toISOString() });
+        ip.data = Object.assign({}, ip.data, { inspo: list.slice(-16) });
+        var ri = await sb.from('projects').update({ data: ip.data }).eq('id', ip.id);
+        if(ri.error){ toast(friendlyErr(ri.error)); return; }
+      }
+      closeSheet(); toast('Added to ' + ((ip.data || {}).title || 'the project')); buzz(); renderAll(); return;
     }
     if(a === 'pj-stage'){
       var sp = pjGet(pj.sel); if(!sp) return;
