@@ -233,6 +233,8 @@
 
   var store = { pack: null, edits: {}, partnerId: '', email: '', requests: [], profile: null, seenPay: {} };
   var sb = null, session = null, channel = null, live = null, reports = {};
+  // For notify-app.js (the 🔔 inbox and phone alerts).
+  window.TTApp = { sb: function(){ return session ? sb : null; }, email: function(){ return session && session.user ? session.user.email : ''; } };
   var cloud = { status: '', otpEmail: '', err: '', unlinked: false, saving: false, again: false, timer: null, refreshTimer: null, lastRefresh: 0, choosing: null, rtDb: '', rtLive: '', missing: false, booting: true };
   var tab = 'today', jobSeg = 'active', sheetState = null;
 
@@ -1606,5 +1608,7 @@
   init();
 })();
 </script>
+<script>window.TT_NOTIFY = { app: 'partner', mount: '#top' };</script>
+<script src="notify-app.js?v=1"></script>
 </body>
 </html>
